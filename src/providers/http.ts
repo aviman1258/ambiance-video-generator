@@ -43,7 +43,7 @@ async function request(
       const hint = /free tier/i.test(body)
         ? ' (Your Gemini API key is on the free tier, which can\'t use this model. Turn on billing for the key in Google AI Studio.)'
         : '';
-      throw new ProviderError(`HTTP ${res.status} from ${redact(url)}: ${body}${hint}`, { retryable, status: res.status });
+      throw new ProviderError(`${describe(url, res.status, body)}${hint}`, { retryable, status: res.status });
     } catch (err) {
       const providerErr =
         err instanceof ProviderError
@@ -53,6 +53,21 @@ async function request(
       await sleep(1000 * 2 ** attempt + Math.random() * 500);
     }
   }
+}
+
+/**
+ * A readable one-liner. Google errors are JSON ({ error: { message } }), so show just the message
+ * plus which call failed, e.g. "Google rejected predictLongRunning (HTTP 400): …".
+ */
+function describe(url: string, status: number, body: string): string {
+  const call = new URL(url).pathname.split('/').pop()?.split(':').pop() ?? 'request';
+  try {
+    const message = (JSON.parse(body) as { error?: { message?: unknown } }).error?.message;
+    if (typeof message === 'string' && message) return `Google rejected ${call} (HTTP ${status}): ${message}`;
+  } catch {
+    // not JSON; fall through
+  }
+  return `HTTP ${status} from ${redact(url)}: ${body}`;
 }
 
 function redact(url: string): string {

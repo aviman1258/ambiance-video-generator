@@ -203,3 +203,8 @@ dialog#confirm-dialog {
 dialog#confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 dialog#confirm-dialog h2 { font-size: 17px; }
 dialog#confirm-dialog .row { margin-top: 16px; }
+
+/* Long unbreakable text (URLs, IDs in errors) must wrap, never widen the page on phones. */
+#home-view, .overlay-inner { grid-template-columns: minmax(0, 1fr); }
+.notice, .hint, .scene, .chip { overflow-wrap: anywhere; }
+.overlay { overflow-x: hidden; }

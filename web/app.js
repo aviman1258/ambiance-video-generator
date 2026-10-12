@@ -206,7 +206,7 @@ function updateGenerateButton() {
 $('#scene').addEventListener('input', updateGenerateButton);
 
 /**
- * Starts a generation and shows a "generating" tile in All images. Resolves once the request is
+ * Starts a generation and shows a "generating" tile in the Images tab. Resolves once the request is
  * accepted; a background check opens the new image when it's ready.
  */
 async function generate(body, errorEl) {

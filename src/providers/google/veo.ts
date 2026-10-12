@@ -49,8 +49,11 @@ export class VeoVideoGenerator implements VideoGenerator {
     if (req.resolution === '1080p' && req.durationSeconds !== 8) {
       throw new ProviderError('Veo only renders 1080p at 8 seconds');
     }
+    // Not `inlineData`: the docs' REST example shows it, but predictLongRunning rejects it with
+    // "`inlineData` isn't supported by this model". The SDKs send this shape (verified 2026-10-12).
     const frame = (img: { bytes: Buffer; mimeType: string }) => ({
-      inlineData: { mimeType: img.mimeType, data: img.bytes.toString('base64') },
+      bytesBase64Encoded: img.bytes.toString('base64'),
+      mimeType: img.mimeType,
     });
     const json = await requestJson(`${BASE_URL}/models/${this.model}:predictLongRunning`, {
       method: 'POST',

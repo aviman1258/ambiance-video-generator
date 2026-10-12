@@ -2,14 +2,14 @@
 
 Personal pipeline for long, illustrated **Indian ambiance** videos for YouTube. The plan, research and phased roadmap are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-What's built so far is two services behind one web page with three tabs: **New scene**, **All images** and **Animations**.
+What's built so far is two services behind one web page with three tabs: **New scene**, **Images** and **Animations**.
 
 1. **Image generation.**
    - Describe a scene, pick a style and tap Generate. You get one image in a hand-painted anime style.
    - Generate stays gray until the text reads like a scene. A shared check (`web/scene-check.js`) catches empty boxes, keyboard mashing and symbol soup; the server applies the same check.
-   - When it's ready, the page opens it from the All images tab.
+   - When it's ready, the page opens it from the Images tab.
    - Each image is tagged automatically: a cheap Gemini vision model looks at it. You can add and remove tags.
-   - **All images** is a thumbnail grid you can search by tag. Tap a thumbnail to open the image's page.
+   - **Images** is a thumbnail grid you can search by tag. Tap a thumbnail to open the image's page.
    - On that page you can:
      - delete it (🗑), which also deletes its animations;
      - edit its tags;

@@ -4,6 +4,7 @@ import { type Db, now } from '../../core/db.ts';
 import type { Logger } from '../../core/log.ts';
 import type { VideoGenerator } from '../../providers/types.ts';
 import { BadRequestError, ConflictError, type ImageService, NotFoundError } from '../images/service.ts';
+import { videoFrame } from '../images/renditions.ts';
 import { suggestMotionPrompt } from './motion.ts';
 
 export type AnimationStatus = 'pending' | 'running' | 'succeeded' | 'failed';
@@ -189,7 +190,7 @@ export class AnimationService {
 
   private async submitAndWatch(row: AnimationRow): Promise<void> {
     const image = this.images.getImageRow(row.image_id);
-    const frame = { bytes: await this.assets.read(image.file_path), mimeType: image.mime_type };
+    const frame = await videoFrame(await this.assets.read(image.file_path));
     let operationId: string;
     try {
       ({ operationId } = await this.generator.start({
