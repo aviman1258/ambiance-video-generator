@@ -43,6 +43,16 @@ test('a free-tier "limit: 0" 429 is not retried and explains how to fix it', asy
   }
 });
 
+test('findOutputText reads output_text or the last text block of a response', async () => {
+  const { findOutputText } = await import('../src/providers/google/tagger.ts');
+  assert.equal(findOutputText({ output_text: '{"tags":["a"]}' }), '{"tags":["a"]}');
+  assert.equal(
+    findOutputText({ steps: [{ type: 'model_output', content: [{ type: 'text', text: '{"tags":["rain"]}' }] }] }),
+    '{"tags":["rain"]}',
+  );
+  assert.equal(findOutputText({ steps: [] }), undefined);
+});
+
 test('imageInfo reads PNG dimensions', () => {
   assert.deepEqual(imageInfo(encodePng(1920, 1080, () => [0, 0, 0])), { mimeType: 'image/png', width: 1920, height: 1080 });
   assert.equal(imageInfo(Buffer.from('nope')).mimeType, 'application/octet-stream');

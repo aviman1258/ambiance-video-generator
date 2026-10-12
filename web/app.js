@@ -1,14 +1,21 @@
-// Ambiance Studio: the image picker + animation page. Plain DOM, no build step.
+// Ambiance Studio. Plain DOM, no build step. Hash routes:
+//   #/new, #/saved, #/all  → home tabs
+//   #/image/<id>           → one image (tags, actions, animation)
 
 const $ = (sel) => document.querySelector(sel);
+const PAGE_SIZE = 60;
+
 const state = {
   config: null,
-  batchId: null,
-  batch: null,
-  animateImage: null, // { id, url, scene_prompt }
+  tab: 'new',
+  search: { saved: '', all: '' },
+  library: { items: [], total: 0, key: '' },
+  pending: [], // generations in progress: { id, scene, error? }
+  image: null, // the image page's image
   suggestedMotion: '',
   takes: [],
-  timers: { batch: null, takes: null },
+  cameFromApp: false,
+  timers: { takes: null, search: null },
 };
 
 // ---------- helpers ----------
@@ -42,6 +49,7 @@ async function api(path, opts = {}) {
 }
 
 const money = (n) => `$${n.toFixed(2)}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function showError(el, err) {
   el.textContent = err ? (err.message ?? String(err)) : '';
@@ -77,6 +85,8 @@ function armedButton(button, labelFn, costFn, action) {
   return reset;
 }
 
+const costSuffix = (usd) => (usd > 0 ? ` · ~${money(usd)}` : '');
+
 // ---------- config / spend ----------
 
 async function loadConfig() {
@@ -93,153 +103,271 @@ async function loadConfig() {
 
 function renderSpend(s) {
   const inflight = s.inFlightUsd > 0 ? ` (+${money(s.inFlightUsd)} in flight)` : '';
-  $('#spend').textContent = `Spent ${money(s.spentUsd)}${inflight} of ${money(s.capUsd)}`;
+  $('#spend').textContent = `${money(s.spentUsd)}${inflight} of ${money(s.capUsd)}`;
 }
 
-async function refreshSpend() {
-  renderSpend(await api('/api/spend'));
+const refreshSpend = async () => renderSpend(await api('/api/spend'));
+
+async function refreshCounts() {
+  const [all, saved] = await Promise.all([api('/api/images?limit=1'), api('/api/images?limit=1&saved=1')]);
+  $('#all-count').textContent = all.total ? `(${all.total})` : '';
+  $('#saved-count').textContent = saved.total ? `(${saved.total})` : '';
 }
 
-// ---------- compose ----------
+// ---------- routing ----------
 
-for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-    document.querySelectorAll('.tab-body').forEach((b) => (b.hidden = b.dataset.body !== tab.dataset.tab));
-    if (tab.dataset.tab === 'saved') loadSaved();
-  });
+function route() {
+  const hash = location.hash || '#/new';
+  const imageMatch = hash.match(/^#\/image\/(\d+)/);
+  clearTimeout(state.timers.takes);
+  if (imageMatch) {
+    $('#home-view').hidden = true;
+    $('#image-view').hidden = false;
+    openImage(Number(imageMatch[1]));
+    return;
+  }
+  const tab = { '#/saved': 'saved', '#/all': 'all' }[hash] ?? 'new';
+  state.tab = tab;
+  $('#home-view').hidden = false;
+  $('#image-view').hidden = true;
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+  $('#new-tab').hidden = tab !== 'new';
+  $('#library-tab').hidden = tab === 'new';
+  if (tab !== 'new') {
+    $('#search').value = state.search[tab];
+    loadLibrary({ reset: true });
+    loadTagChips();
+  }
+  window.scrollTo(0, 0);
 }
 
-const generateLabel = () => {
-  const c = state.config;
-  return c ? `Generate ${c.imagesPerBatch} images${c.batchCostUsd > 0 ? ` · ~${money(c.batchCostUsd)}` : ''}` : 'Generate';
-};
+window.addEventListener('hashchange', () => {
+  state.cameFromApp = true;
+  route();
+});
 
-async function startBatch(body) {
-  const batch = await api('/api/batches', { method: 'POST', body });
-  await openBatch(batch.id);
-  loadHistory();
-  $('#batch').scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
+// ---------- generating ----------
 
-let resetGenerate = () => {};
+/** Starts a generation, shows it as a "generating" tile in All images, then opens the new image. */
+async function generate(body, errorEl) {
+  showError(errorEl, null);
+  let gen;
+  try {
+    gen = await api('/api/generations', { method: 'POST', body });
+  } catch (e) {
+    showError(errorEl, e);
+    return;
+  }
+  const pending = { id: gen.id, scene: gen.scene_prompt };
+  state.pending.unshift(pending);
+  if (location.hash === '#/all') loadLibrary({ reset: true });
+  else location.hash = '#/all';
 
-// ---------- saved images ----------
-
-async function loadSaved() {
-  const saved = await api('/api/images/saved');
-  $('#saved-count').textContent = saved.length ? `(${saved.length})` : '';
-  $('#saved-empty').hidden = saved.length > 0;
-  $('#saved-grid').replaceChildren(
-    ...saved.map((img) =>
-      h(
-        'div',
-        { class: 'card' },
-        h('a', { class: 'media-link', href: img.url, target: '_blank', rel: 'noopener' }, h('img', { class: 'media', src: img.url, loading: 'lazy', alt: img.scene_prompt })),
-        h('div', { class: 'meta', title: img.scene_prompt }, truncate(img.scene_prompt, 90)),
-        h(
-          'div',
-          { class: 'actions' },
-          h('button', { class: 'primary', onclick: () => openAnimate(img) }, 'Animate'),
-          h('button', { onclick: () => startBatch({ referenceImageId: img.id }).catch((e) => showError($('#compose-error'), e)) }, 'More like this'),
-          h('button', { onclick: async () => { await api(`/api/images/${img.id}`, { method: 'PATCH', body: { saved: false } }); loadSaved(); } }, 'Unsave'),
-        ),
-      ),
-    ),
-  );
-}
-
-const truncate = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
-// ---------- batch view ----------
-
-async function openBatch(id) {
-  state.batchId = id;
-  clearTimeout(state.timers.batch);
-  await pollBatch();
-}
-
-async function pollBatch() {
-  const id = state.batchId;
-  const batch = await api(`/api/batches/${id}`);
-  if (state.batchId !== id) return;
-  state.batch = batch;
-  renderBatch();
-  if (batch.status === 'running') state.timers.batch = setTimeout(pollBatch, 2000);
-  else {
+  while (true) {
+    await sleep(2000);
+    let latest;
+    try {
+      latest = await api(`/api/generations/${gen.id}`);
+    } catch {
+      continue;
+    }
+    if (latest.status === 'running') continue;
     refreshSpend();
-    loadHistory();
+    refreshCounts();
+    if (latest.images.length) {
+      state.pending = state.pending.filter((p) => p !== pending);
+      // Only jump to the new image if they're still waiting on the All tab.
+      if (location.hash === '#/all') location.hash = `#/image/${latest.images[0].id}`;
+      return;
+    }
+    pending.error = latest.error ?? 'Generation failed';
+    if (state.tab === 'all') renderLibrary();
+    return;
   }
 }
 
-function renderBatch() {
-  const b = state.batch;
-  $('#batch').hidden = false;
-  $('#batch-title').textContent = `Batch #${b.id}${b.reference_image_id ? ` · more like image #${b.reference_image_id}` : ''}`;
-  const pill = $('#batch-status');
-  pill.className = `pill ${b.status}`;
-  pill.textContent = b.status === 'running' ? `generating ${b.images.length}/${b.requested_count}` : b.status;
-  $('#batch-scene').textContent = b.scene_prompt;
-  $('#batch-prompt').textContent = b.full_prompt;
-  showError($('#batch-error'), b.error ? new Error(b.error) : null);
+// ---------- library (Saved / All) ----------
 
-  const cards = b.images.map((img) => imageCard(img));
-  const missing = b.status === 'running' ? b.requested_count - b.images.length : 0;
-  for (let i = 0; i < missing; i++) cards.push(h('div', { class: 'card' }, h('div', { class: 'skeleton' })));
-  $('#batch-grid').replaceChildren(...cards);
+async function loadLibrary({ reset }) {
+  const tab = state.tab;
+  const q = state.search[tab];
+  const key = `${tab}|${q}`;
+  const offset = reset ? 0 : state.library.items.length;
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+  if (q) params.set('q', q);
+  if (tab === 'saved') params.set('saved', '1');
+  const page = await api(`/api/images?${params}`);
+  if (`${state.tab}|${state.search[state.tab]}` !== key) return; // a newer search won
+  state.library = { key, total: page.total, items: reset ? page.items : [...state.library.items, ...page.items] };
+  renderLibrary();
 }
 
-function imageCard(img) {
-  const card = h(
-    'div',
-    { class: `card${img.saved ? ' saved' : ''}` },
-    h('a', { class: 'media-link', href: img.url, target: '_blank', rel: 'noopener', title: 'Open full size' }, h('img', { class: 'media', src: img.url, loading: 'lazy', alt: `Candidate ${img.id}` })),
+function renderLibrary() {
+  const { items, total } = state.library;
+  const tab = state.tab;
+  const q = state.search[tab];
+  const pendingTiles =
+    tab === 'all' && !q
+      ? state.pending.map((p) =>
+          h(
+            'div',
+            { class: 'thumb pending', title: p.scene },
+            p.error
+              ? h('div', { class: 'thumb-error' }, h('strong', {}, 'Failed'), h('span', {}, p.error), h('button', { onclick: () => { state.pending = state.pending.filter((x) => x !== p); renderLibrary(); } }, 'Dismiss'))
+              : h('div', { class: 'skeleton' }, h('span', {}, 'Generating…')),
+          ),
+        )
+      : [];
+  const tiles = items.map((img) =>
     h(
-      'div',
-      { class: 'actions' },
-      h('button', { class: `star${img.saved ? ' on' : ''}`, title: img.saved ? 'Saved: click to unsave' : 'Save for later', onclick: () => toggleSave(img) }, img.saved ? '★ Saved' : '☆ Save'),
-      h('button', { onclick: () => startBatch({ referenceImageId: img.id }).catch((e) => showError($('#batch-error'), e)) }, 'More like this'),
-      h('span', { class: 'grow' }),
-      h('button', { class: 'primary', onclick: () => openAnimate({ ...img, scene_prompt: state.batch.scene_prompt }) }, 'Animate'),
+      'a',
+      { class: 'thumb', href: `#/image/${img.id}`, title: img.tags.join(', ') },
+      h('img', { src: img.thumbUrl, loading: 'lazy', alt: img.tags.join(', ') || img.scene_prompt }),
+      h(
+        'span',
+        { class: 'thumb-badges' },
+        img.saved && h('span', { class: 'tb star-badge' }, '★'),
+        img.animation_count > 0 && h('span', { class: 'tb' }, `▶ ${img.animation_count}`),
+      ),
     ),
-    h('div', { class: 'meta' }, `#${img.id}${img.width ? ` · ${img.width}×${img.height}` : ''}`),
   );
-  return card;
+  $('#library-grid').replaceChildren(...pendingTiles, ...tiles);
+  $('#library-summary').textContent = total ? `${total} image${total === 1 ? '' : 's'}${q ? ` tagged “${q}”` : ''}` : '';
+  const empty = $('#library-empty');
+  empty.hidden = items.length > 0 || pendingTiles.length > 0;
+  empty.textContent = q
+    ? 'No images match those tags.'
+    : tab === 'saved'
+      ? 'Nothing saved yet. Open an image and tap ☆ Save to keep it here.'
+      : 'No images yet. Describe a scene in the New scene tab.';
+  $('#load-more').hidden = items.length >= total;
 }
 
-async function toggleSave(img) {
-  await api(`/api/images/${img.id}`, { method: 'PATCH', body: { saved: !img.saved } });
-  await pollBatch();
-  loadSaved();
+async function loadTagChips() {
+  const tags = await api('/api/tags');
+  const active = new Set(state.search[state.tab].split(/\s+/).filter(Boolean));
+  $('#tag-chips').replaceChildren(
+    ...tags.slice(0, 18).map((t) =>
+      h('button', { class: `chip${active.has(t.tag.split(' ')[0]) ? ' on' : ''}`, onclick: () => toggleSearchTag(t.tag) }, t.tag, h('span', { class: 'chip-count' }, String(t.count))),
+    ),
+  );
 }
 
-// ---------- animate ----------
+function toggleSearchTag(tag) {
+  const word = tag.split(' ')[0];
+  const terms = state.search[state.tab].split(/\s+/).filter(Boolean);
+  const next = terms.includes(word) ? terms.filter((t) => t !== word) : [...terms, word];
+  setSearch(next.join(' '));
+}
 
-async function openAnimate(img) {
-  state.animateImage = img;
-  $('#animate').hidden = false;
-  $('#animate-image').src = img.url;
+function setSearch(q) {
+  state.search[state.tab] = q;
+  $('#search').value = q;
+  loadLibrary({ reset: true });
+  loadTagChips();
+}
+
+$('#search').addEventListener('input', () => {
+  clearTimeout(state.timers.search);
+  state.timers.search = setTimeout(() => setSearch($('#search').value.trim().toLowerCase()), 250);
+});
+$('#load-more').addEventListener('click', () => loadLibrary({ reset: false }));
+
+// ---------- image page ----------
+
+async function openImage(id) {
+  showError($('#image-error'), null);
   showError($('#animate-error'), null);
-  const { motionPrompt } = await api(`/api/images/${img.id}/motion-suggestion`);
+  let img;
+  try {
+    img = await api(`/api/images/${id}`);
+  } catch (e) {
+    showError($('#image-error'), e);
+    return;
+  }
+  state.image = img;
+  renderImage();
+  window.scrollTo(0, 0);
+  const { motionPrompt } = await api(`/api/images/${id}/motion-suggestion`);
   state.suggestedMotion = motionPrompt;
   $('#motion').value = motionPrompt;
-  await loadTakes();
-  $('#animate').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  loadTakes();
 }
 
-$('#close-animate').addEventListener('click', () => {
-  $('#animate').hidden = true;
-  state.animateImage = null;
-  clearTimeout(state.timers.takes);
+function renderImage() {
+  const img = state.image;
+  $('#image-preview').src = img.previewUrl;
+  $('#image-preview').alt = img.tags.join(', ');
+  $('#full-link').href = img.url;
+  const save = $('#save-toggle');
+  save.textContent = img.saved ? '★ Saved' : '☆ Save';
+  save.classList.toggle('on', img.saved);
+  const created = new Date(img.created_at).toLocaleString();
+  $('#image-meta').replaceChildren(
+    `#${img.id}${img.width ? ` · ${img.width}×${img.height}` : ''} · ${created}`,
+    img.reference_image_id ? h('span', {}, ' · variation of ', h('a', { href: `#/image/${img.reference_image_id}` }, `#${img.reference_image_id}`)) : '',
+    ' · tap the image for full resolution',
+  );
+  $('#image-scene').textContent = img.scene_prompt;
+  $('#image-prompt').textContent = img.full_prompt;
+  renderTags();
+}
+
+function renderTags() {
+  const tags = state.image.tags;
+  $('#image-tags').replaceChildren(
+    ...(tags.length
+      ? tags.map((tag) =>
+          h(
+            'span',
+            { class: 'chip' },
+            h('a', { href: '#/all', title: `Show all images tagged ${tag}`, onclick: () => { state.search.all = tag.split(' ')[0]; } }, tag),
+            h('button', { class: 'chip-x', title: `Remove ${tag}`, 'aria-label': `Remove ${tag}`, onclick: () => saveTags(tags.filter((t) => t !== tag)) }, '×'),
+          ),
+        )
+      : [h('span', { class: 'hint' }, 'No tags yet.')]),
+  );
+}
+
+async function saveTags(tags) {
+  try {
+    state.image = await api(`/api/images/${state.image.id}`, { method: 'PATCH', body: { tags } });
+    renderTags();
+  } catch (e) {
+    showError($('#image-error'), e);
+  }
+}
+
+$('#tag-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = $('#tag-input');
+  const added = input.value.split(',').map((t) => t.trim()).filter(Boolean);
+  if (!added.length) return;
+  input.value = '';
+  saveTags([...state.image.tags, ...added]);
 });
+
+$('#save-toggle').addEventListener('click', async () => {
+  state.image = await api(`/api/images/${state.image.id}`, { method: 'PATCH', body: { saved: !state.image.saved } });
+  renderImage();
+  refreshCounts();
+});
+
+$('#back').addEventListener('click', () => {
+  if (state.cameFromApp && history.length > 1) history.back();
+  else location.hash = '#/all';
+});
+
+// ---------- animation takes ----------
+
 $('#reset-motion').addEventListener('click', () => ($('#motion').value = state.suggestedMotion));
 
 async function loadTakes() {
   clearTimeout(state.timers.takes);
-  const img = state.animateImage;
-  if (!img) return;
+  const img = state.image;
+  if (!img || $('#image-view').hidden) return;
   const takes = await api(`/api/animations?imageId=${img.id}`);
-  if (state.animateImage?.id !== img.id) return;
+  if (state.image?.id !== img.id) return;
   state.takes = takes;
   renderTakes();
   if (takes.some((t) => t.status === 'pending' || t.status === 'running')) state.timers.takes = setTimeout(loadTakes, 3000);
@@ -254,9 +382,9 @@ function renderTakes() {
         t.status === 'succeeded'
           ? h('video', { class: 'media', src: t.url, autoplay: true, loop: true, muted: true, playsinline: true, controls: true })
           : t.status === 'failed'
-            ? h('img', { class: 'media', src: state.animateImage.url, alt: '', style: 'opacity:.35' })
-            : h('div', { class: 'skeleton' });
-      if (media.tagName === 'VIDEO') media.muted = true; // attribute alone doesn't mute in every browser
+            ? h('img', { class: 'media', src: state.image.thumbUrl, alt: '', style: 'opacity:.35' })
+            : h('div', { class: 'skeleton' }, h('span', {}, 'Animating… a few minutes'));
+      if (media.tagName === 'VIDEO') media.muted = true; // the attribute alone doesn't mute in every browser
       return h(
         'div',
         { class: 'card' },
@@ -266,30 +394,13 @@ function renderTakes() {
           { class: 'actions' },
           h('span', { class: `pill ${t.status}` }, t.status === 'running' ? 'generating…' : t.status),
           h('span', { class: 'grow' }),
-          t.status === 'succeeded' && h('a', { href: t.url, target: '_blank', rel: 'noopener' }, h('button', {}, 'Open')),
+          t.status === 'succeeded' && h('a', { href: t.url, target: '_blank', rel: 'noopener', class: 'button-link' }, 'Open'),
           t.status === 'succeeded' &&
             h('button', { class: `star${t.starred ? ' on' : ''}`, onclick: async () => { await api(`/api/animations/${t.id}`, { method: 'PATCH', body: { starred: !t.starred } }); loadTakes(); } }, t.starred ? '★ Best' : '☆ Best'),
         ),
-        h('div', { class: 'meta', title: t.motion_prompt }, `#${t.id} · ${t.model} · ${t.duration_s}s ${t.resolution} · ${truncate(t.motion_prompt, 80)}`, t.error && h('p', { class: 'error' }, t.error)),
+        h('div', { class: 'meta', title: t.motion_prompt }, `#${t.id} · ${t.duration_s}s ${t.resolution}`, t.error && h('p', { class: 'error' }, t.error)),
       );
     }),
-  );
-}
-
-// ---------- history ----------
-
-async function loadHistory() {
-  const batches = await api('/api/batches?limit=15');
-  $('#history').hidden = batches.length === 0;
-  $('#history-list').replaceChildren(
-    ...batches.map((b) =>
-      h(
-        'div',
-        { class: 'history-item', onclick: () => openBatch(b.id).then(() => $('#batch').scrollIntoView({ behavior: 'smooth' })) },
-        h('div', { class: 'history-thumbs' }, ...b.images.slice(0, 6).map((i) => h('img', { src: i.url, loading: 'lazy', alt: '' }))),
-        h('div', {}, h('div', {}, `#${b.id} `, h('span', { class: `pill ${b.status}` }, b.status)), h('div', { class: 'history-scene' }, b.scene_prompt)),
-      ),
-    ),
   );
 }
 
@@ -302,49 +413,28 @@ $('#logout').addEventListener('click', async () => {
 
 async function init() {
   await loadConfig();
-
-  resetGenerate = armedButton(
-    $('#generate'),
-    generateLabel,
-    () => state.config.batchCostUsd,
-    async () => {
-      showError($('#compose-error'), null);
-      try {
-        await startBatch({ scenePrompt: $('#scene').value, stylePreset: $('#style').value });
-      } catch (e) {
-        showError($('#compose-error'), e);
-      }
-    },
-  );
+  const genCost = () => state.config.generationCostUsd;
 
   armedButton(
-    $('#regenerate'),
-    () => 'Regenerate (same prompt)',
-    () => state.config.batchCostUsd,
-    async () => {
-      const b = state.batch;
-      try {
-        await startBatch({ scenePrompt: b.scene_prompt, stylePreset: b.style_preset, parentBatchId: b.id });
-      } catch (e) {
-        showError($('#batch-error'), e);
-      }
-    },
+    $('#generate'),
+    () => `Generate ${state.config.imagesPerBatch === 1 ? 'image' : `${state.config.imagesPerBatch} images`}${costSuffix(genCost())}`,
+    genCost,
+    () => generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error')),
   );
-
-  $('#edit-prompt').addEventListener('click', () => {
-    $('#scene').value = state.batch.scene_prompt;
-    $('#scene').focus();
-    $('#compose').scrollIntoView({ behavior: 'smooth' });
-  });
-
+  armedButton($('#more-like-this'), () => `More like this${costSuffix(genCost())}`, genCost, () =>
+    generate({ referenceImageId: state.image.id }, $('#image-error')),
+  );
+  armedButton($('#generate-another'), () => `Generate another${costSuffix(genCost())}`, genCost, () =>
+    generate({ scenePrompt: state.image.scene_prompt, stylePreset: state.image.style_preset, parentBatchId: state.image.batch_id }, $('#image-error')),
+  );
   armedButton(
     $('#start-animation'),
-    () => `Animate${state.config.animationCostUsd > 0 ? ` · ~${money(state.config.animationCostUsd)}` : ''}`,
+    () => `Animate${costSuffix(state.config.animationCostUsd)}`,
     () => state.config.animationCostUsd,
     async () => {
       showError($('#animate-error'), null);
       try {
-        await api('/api/animations', { method: 'POST', body: { imageId: state.animateImage.id, motionPrompt: $('#motion').value } });
+        await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
         await loadTakes();
       } catch (e) {
         showError($('#animate-error'), e);
@@ -352,9 +442,8 @@ async function init() {
     },
   );
 
-  await Promise.all([loadHistory(), loadSaved()]);
-  const [latest] = await api('/api/batches?limit=1');
-  if (latest) await openBatch(latest.id);
+  refreshCounts();
+  route();
 }
 
 init().catch((e) => {

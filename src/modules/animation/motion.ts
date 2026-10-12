@@ -5,10 +5,11 @@ const MOTION_RULES: { match: RegExp; motion: string }[] = [
   { match: /\b(lamp|lantern|candle|diya|diyas|lights?)\b/i, motion: 'warm lamp and candle light flickering softly' },
   { match: /\b(snow|snowfall|winter)\b/i, motion: 'snowflakes drifting slowly down' },
   { match: /\b(river|ganga|ganges|lake|sea|ocean|backwaters?|water|ghats?)\b/i, motion: 'gentle ripples moving across the water' },
-  { match: /\b(tree|trees|palm|palms|leaves|garden|plants?)\b/i, motion: 'leaves and palm fronds swaying slightly in the breeze' },
+  { match: /\b(tree|trees|palm|palms|leaves|garden|plants?|wind|breeze)\b/i, motion: 'leaves and branches swaying slightly in the breeze' },
   { match: /\b(city|street|traffic|taxis?|road)\b/i, motion: 'blurred city lights shimmering in the distance' },
   { match: /\b(fire|fireplace|stove|hearth|bonfire)\b/i, motion: 'flames flickering in the stove' },
   { match: /\b(mist|fog|cloud|clouds|haze)\b/i, motion: 'mist drifting slowly through the scene' },
+  { match: /\b(dust|motes|sunbeams?|sunlight|sunlit)\b/i, motion: 'dust motes drifting slowly through the shafts of sunlight' },
   { match: /\b(thunder|lightning)\b/i, motion: 'a faint, distant flash of lightning lighting the clouds' },
   { match: /\b(stars|starry|night sky)\b/i, motion: 'stars twinkling faintly' },
 ];

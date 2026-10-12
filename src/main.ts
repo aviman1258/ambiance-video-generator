@@ -26,6 +26,7 @@ const images = new ImageService({
   db,
   assets,
   generator: providers.images,
+  tagger: providers.tagger,
   cost,
   log,
   imagesPerBatch: config.imagesPerBatch,
@@ -45,7 +46,8 @@ app = await buildApp({ config, assets, cost, images, animations });
 
 const interrupted = images.markInterrupted();
 const resumed = animations.resumeInFlight();
-app.log.info({ provider: config.providers, interruptedBatches: interrupted, resumedAnimations: resumed }, 'startup recovery done');
+const backfilled = await images.backfill();
+app.log.info({ provider: config.providers, interruptedBatches: interrupted, resumedAnimations: resumed, backfilled }, 'startup recovery done');
 
 await app.listen({ port: config.port, host: config.host });
 app.log.info(`Open http://${config.host}:${config.port} (${config.providers === 'mock' ? 'MOCK providers, free' : 'GOOGLE providers, paid'})`);

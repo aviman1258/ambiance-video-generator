@@ -9,7 +9,9 @@ const EnvSchema = z
     PORT: z.coerce.number().int().positive().default(4317),
     HOST: z.string().default('127.0.0.1'),
     DATA_DIR: z.string().default('./data'),
-    IMAGES_PER_BATCH: z.coerce.number().int().min(1).max(12).default(6),
+    IMAGES_PER_BATCH: z.coerce.number().int().min(1).max(12).default(1),
+    TAG_MODEL: z.string().default('gemini-3.1-flash-lite'),
+    TAG_COST_USD: z.coerce.number().nonnegative().default(0.0005),
     IMAGE_MODEL: z.string().default('gemini-nano-banana-2.1'),
     IMAGE_SIZE: z.enum(['1K', '2K', '4K']).default('2K'),
     IMAGE_COST_USD: z.coerce.number().nonnegative().default(0.0504),
@@ -49,6 +51,8 @@ export type Config = {
   imageModel: string;
   imageSize: '1K' | '2K' | '4K';
   imageCostUsd: number;
+  tagModel: string;
+  tagCostUsd: number;
   videoModel: string;
   videoCostPerSecondUsd: number;
   videoPollIntervalMs: number;
@@ -79,6 +83,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     imageModel: e.IMAGE_MODEL,
     imageSize: e.IMAGE_SIZE,
     imageCostUsd: e.IMAGE_COST_USD,
+    tagModel: e.TAG_MODEL,
+    tagCostUsd: e.TAG_COST_USD,
     videoModel: e.VIDEO_MODEL,
     videoCostPerSecondUsd: e.VIDEO_COST_PER_SECOND_USD,
     videoPollIntervalMs: e.VIDEO_POLL_INTERVAL_MS,

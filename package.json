@@ -16,6 +16,7 @@
   "dependencies": {
     "@fastify/static": "^10.1.6",
     "fastify": "^5.12.5",
+    "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {

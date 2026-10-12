@@ -16,6 +16,14 @@ export interface ImageGenerator {
   generate(req: ImageRequest): Promise<ImageData>;
 }
 
+/** Looks at a generated image and returns short search tags for it. */
+export interface ImageTagger {
+  readonly provider: string;
+  readonly model: string;
+  readonly costPerCallUsd: number;
+  tag(req: { image: ImageData; scenePrompt: string }): Promise<string[]>;
+}
+
 export type VideoRequest = {
   prompt: string;
   firstFrame: ImageData;

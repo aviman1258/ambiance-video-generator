@@ -18,6 +18,9 @@ test('motion suggestion picks in-place motion from scene keywords and forbids ca
   assert.match(s, /lamp .* flickering/);
   assert.match(s, /no camera movement/i);
   assert.match(suggestMotionPrompt('an empty room'), /dust motes/);
+  const kolkata = suggestMotionPrompt('Summer afternoon in rural Kolkata. Wind in the trees. Sunny with dust motes in the sunlight.');
+  assert.match(kolkata, /swaying slightly in the breeze/);
+  assert.match(kolkata, /shafts of sunlight/);
 });
 
 test('an animation uses the image as first and last frame, then stores the clip and charges once', async () => {
@@ -55,8 +58,8 @@ test('a double click returns the in-flight animation instead of paying twice', a
 });
 
 test('in-flight estimates count against the cap', async () => {
-  const services = makeServices({ cap: 0.3 + 0.96 + 0.5 });
-  const image = await withImage(services); // $0.30 spent
+  const services = makeServices({ cap: 0.051 + 0.96 + 0.5 });
+  const image = await withImage(services); // $0.051 spent
   services.animations.create({ imageId: image.id, motionPrompt: 'one' }); // $0.96 in flight
   assert.throws(() => services.animations.create({ imageId: image.id, motionPrompt: 'two' }), SpendCapError);
   await services.animations.idle();

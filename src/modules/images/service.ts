@@ -4,8 +4,10 @@ import type { CostGuard } from '../../core/cost.ts';
 import { type Db, now } from '../../core/db.ts';
 import { imageInfo } from '../../core/imageInfo.ts';
 import type { Logger } from '../../core/log.ts';
-import type { ImageData, ImageGenerator } from '../../providers/types.ts';
+import type { ImageData, ImageGenerator, ImageTagger } from '../../providers/types.ts';
+import { makeRenditions } from './renditions.ts';
 import { buildImagePrompt, buildVariationPrompt, DEFAULT_STYLE_PRESET, STYLE_PRESETS } from './style.ts';
+import { keywordTags, normalizeTags } from './tags.ts';
 
 export type BatchStatus = 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted';
 
@@ -13,6 +15,8 @@ export type ImageRow = {
   id: number;
   batch_id: number;
   file_path: string;
+  thumb_path: string | null;
+  preview_path: string | null;
   sha256: string;
   mime_type: string;
   bytes: number;
@@ -22,6 +26,9 @@ export type ImageRow = {
   notes: string | null;
   created_at: string;
 };
+
+/** An image as the UI sees it: plus its scene, tags and how many finished animations it has. */
+export type ImageListItem = ImageRow & { scene_prompt: string; tags: string[]; animation_count: number };
 
 export type BatchRow = {
   id: number;
@@ -41,11 +48,13 @@ export type BatchRow = {
 export type CreateBatchInput = {
   scenePrompt?: string;
   stylePreset?: string;
-  /** "Regenerate" / "edit prompt": link the new batch to the one it came from. */
+  /** "Generate another": link the new generation to the one it came from. */
   parentBatchId?: number;
   /** "More like this": use an existing image as the visual reference. */
   referenceImageId?: number;
 };
+
+export type ListImagesInput = { q?: string; saved?: boolean; limit?: number; offset?: number };
 
 export class NotFoundError extends Error {
   readonly statusCode = 404;
@@ -56,10 +65,15 @@ export class BadRequestError extends Error {
 
 const CONCURRENCY = 3;
 
+/**
+ * Generates, stores, tags and finds images. A "batch" is one Generate click (one image by
+ * default); it's kept internally for provenance and progress but the UI only shows images.
+ */
 export class ImageService {
   readonly db: Db;
   readonly assets: AssetStore;
   readonly generator: ImageGenerator;
+  readonly tagger: ImageTagger;
   readonly cost: CostGuard;
   readonly log: Logger;
   readonly imagesPerBatch: number;
@@ -69,6 +83,7 @@ export class ImageService {
     db: Db;
     assets: AssetStore;
     generator: ImageGenerator;
+    tagger: ImageTagger;
     cost: CostGuard;
     log: Logger;
     imagesPerBatch: number;
@@ -77,10 +92,17 @@ export class ImageService {
     this.db = deps.db;
     this.assets = deps.assets;
     this.generator = deps.generator;
+    this.tagger = deps.tagger;
     this.cost = deps.cost;
     this.log = deps.log;
     this.imagesPerBatch = deps.imagesPerBatch;
     this.imageSize = deps.imageSize;
+  }
+
+  /** Estimated cost of one Generate click. */
+  generationCostUsd(): number {
+    const usd = this.imagesPerBatch * (this.generator.costPerImageUsd + this.tagger.costPerCallUsd);
+    return Math.round(usd * 10_000) / 10_000;
   }
 
   /** Validates, records the batch and returns it immediately; images arrive in the background. */
@@ -99,7 +121,7 @@ export class ImageService {
     if (scenePrompt.length > 2000) throw new BadRequestError('Scene prompt is too long (2000 characters max)');
 
     const count = this.imagesPerBatch;
-    this.cost.assertCanSpend(count * this.generator.costPerImageUsd, `${count} images`);
+    this.cost.assertCanSpend(this.generationCostUsd(), count === 1 ? 'An image' : `${count} images`);
 
     const fullPrompt = reference ? buildVariationPrompt(scenePrompt, stylePreset) : buildImagePrompt(scenePrompt, stylePreset);
     const result = this.db
@@ -165,54 +187,166 @@ export class ImageService {
   private async storeImage(batch: BatchRow, image: ImageData): Promise<void> {
     const info = imageInfo(image.bytes);
     const mimeType = info.mimeType !== 'application/octet-stream' ? info.mimeType : image.mimeType;
-    // File first, then the row, so a row never points at a missing file.
+    // Files first, then the row, so a row never points at a missing file.
     const stored = await this.assets.put(image.bytes, extensionFor(mimeType));
+    const { thumbPath, previewPath } = await this.storeRenditions(image.bytes);
     const res = this.db
       .prepare(
-        `INSERT INTO images (batch_id, file_path, sha256, mime_type, bytes, width, height, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO images (batch_id, file_path, thumb_path, preview_path, sha256, mime_type, bytes, width, height, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(batch.id, stored.relPath, stored.sha256, mimeType, stored.bytes, info.width ?? null, info.height ?? null, now());
+      .run(
+        batch.id,
+        stored.relPath,
+        thumbPath,
+        previewPath,
+        stored.sha256,
+        mimeType,
+        stored.bytes,
+        info.width ?? null,
+        info.height ?? null,
+        now(),
+      );
+    const imageId = Number(res.lastInsertRowid);
     this.cost.record({
       provider: this.generator.provider,
       operation: 'image.generate',
       usd: this.generator.costPerImageUsd,
       refType: 'image',
-      refId: Number(res.lastInsertRowid),
+      refId: imageId,
     });
+    await this.autoTag(imageId, { bytes: image.bytes, mimeType }, batch.scene_prompt);
+  }
+
+  private async storeRenditions(original: Buffer): Promise<{ thumbPath: string | null; previewPath: string | null }> {
+    try {
+      const { thumb, preview } = await makeRenditions(original);
+      const [t, p] = await Promise.all([this.assets.put(thumb, 'webp'), this.assets.put(preview, 'webp')]);
+      return { thumbPath: t.relPath, previewPath: p.relPath };
+    } catch (err) {
+      // The page falls back to the original, so a rendition failure shouldn't lose the image.
+      this.log.warn({ err: (err as Error).message }, 'could not make thumbnail/preview');
+      return { thumbPath: null, previewPath: null };
+    }
+  }
+
+  /** Vision tags from the tagger; on any failure, free keyword tags from the prompt instead. */
+  private async autoTag(imageId: number, image: ImageData, scenePrompt: string): Promise<void> {
+    let tags: string[];
+    try {
+      tags = normalizeTags(await this.tagger.tag({ image, scenePrompt }));
+      this.cost.record({
+        provider: this.tagger.provider,
+        operation: 'image.tag',
+        usd: this.tagger.costPerCallUsd,
+        refType: 'image',
+        refId: imageId,
+      });
+      if (tags.length === 0) tags = keywordTags(scenePrompt);
+    } catch (err) {
+      this.log.warn({ imageId, err: (err as Error).message }, 'tagging failed, using prompt keywords');
+      tags = keywordTags(scenePrompt);
+    }
+    this.writeTags(imageId, tags);
+  }
+
+  /**
+   * On startup: give older images (from before thumbnails/tags existed) a thumbnail, preview and
+   * keyword tags. Free: never calls a paid API.
+   */
+  async backfill(): Promise<{ renditions: number; tagged: number }> {
+    const missingRenditions = this.db.prepare('SELECT * FROM images WHERE thumb_path IS NULL').all() as ImageRow[];
+    for (const img of missingRenditions) {
+      const { thumbPath, previewPath } = await this.storeRenditions(await this.assets.read(img.file_path));
+      if (thumbPath) this.db.prepare('UPDATE images SET thumb_path = ?, preview_path = ? WHERE id = ?').run(thumbPath, previewPath, img.id);
+    }
+    const untagged = this.db
+      .prepare(
+        `SELECT i.id, b.scene_prompt FROM images i JOIN image_batches b ON b.id = i.batch_id
+         WHERE NOT EXISTS (SELECT 1 FROM image_tags t WHERE t.image_id = i.id)`,
+      )
+      .all() as { id: number; scene_prompt: string }[];
+    for (const row of untagged) this.writeTags(row.id, keywordTags(row.scene_prompt));
+    return { renditions: missingRenditions.length, tagged: untagged.length };
   }
 
   /** Batches left "running" by a crash or restart can't be resumed; mark them so the UI doesn't spin forever. */
   markInterrupted(): number {
     const res = this.db
-      .prepare("UPDATE image_batches SET status = 'interrupted', error = 'Server stopped before the batch finished' WHERE status = 'running'")
+      .prepare("UPDATE image_batches SET status = 'interrupted', error = 'Server stopped before the image finished' WHERE status = 'running'")
       .run();
     return Number(res.changes);
   }
 
   getBatch(id: number): BatchRow & { images: ImageRow[] } {
-    return { ...this.getBatchRow(id), images: this.imagesForBatch(id) };
+    return {
+      ...this.getBatchRow(id),
+      images: this.db.prepare('SELECT * FROM images WHERE batch_id = ? ORDER BY id').all(id) as ImageRow[],
+    };
   }
 
-  listBatches(limit = 20): (BatchRow & { images: ImageRow[] })[] {
-    const rows = this.db.prepare('SELECT * FROM image_batches ORDER BY id DESC LIMIT ?').all(limit) as BatchRow[];
-    return rows.map((b) => ({ ...b, images: this.imagesForBatch(b.id) }));
-  }
-
-  listSaved(): (ImageRow & { scene_prompt: string })[] {
-    return this.db
+  /** Newest first. Every search term must match the start of a word in at least one of the image's tags. */
+  listImages(input: ListImagesInput = {}): { items: ImageListItem[]; total: number } {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (input.saved) where.push('i.saved = 1');
+    for (const term of searchTerms(input.q)) {
+      where.push(
+        `EXISTS (SELECT 1 FROM image_tags t WHERE t.image_id = i.id AND (t.tag LIKE ? ESCAPE '\\' OR t.tag LIKE ? ESCAPE '\\'))`,
+      );
+      const escaped = term.replace(/[\\%_]/g, (c) => `\\${c}`);
+      params.push(`${escaped}%`, `% ${escaped}%`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = (
+      this.db.prepare(`SELECT COUNT(*) AS n FROM images i ${whereSql}`).get(...params) as { n: number }
+    ).n;
+    const rows = this.db
       .prepare(
-        `SELECT i.*, b.scene_prompt FROM images i JOIN image_batches b ON b.id = i.batch_id
-         WHERE i.saved = 1 ORDER BY i.id DESC`,
+        `SELECT i.*, b.scene_prompt,
+           (SELECT COUNT(*) FROM animations a WHERE a.image_id = i.id AND a.status = 'succeeded') AS animation_count
+         FROM images i JOIN image_batches b ON b.id = i.batch_id
+         ${whereSql} ORDER BY i.id DESC LIMIT ? OFFSET ?`,
       )
-      .all() as (ImageRow & { scene_prompt: string })[];
+      .all(...params, input.limit ?? 60, input.offset ?? 0) as (ImageRow & { scene_prompt: string; animation_count: number })[];
+    return { items: rows.map((r) => ({ ...r, tags: this.tagsFor(r.id) })), total };
   }
 
-  updateImage(id: number, patch: { saved?: boolean; notes?: string | null }): ImageRow {
+  /** Everything the image page needs. */
+  getImageDetail(id: number): ImageListItem & { full_prompt: string; style_preset: string; reference_image_id: number | null } {
+    const row = this.db
+      .prepare(
+        `SELECT i.*, b.scene_prompt, b.full_prompt, b.style_preset, b.reference_image_id,
+           (SELECT COUNT(*) FROM animations a WHERE a.image_id = i.id AND a.status = 'succeeded') AS animation_count
+         FROM images i JOIN image_batches b ON b.id = i.batch_id WHERE i.id = ?`,
+      )
+      .get(id) as
+      | (ImageRow & { scene_prompt: string; full_prompt: string; style_preset: string; reference_image_id: number | null; animation_count: number })
+      | undefined;
+    if (!row) throw new NotFoundError(`Image ${id} not found`);
+    return { ...row, tags: this.tagsFor(id) };
+  }
+
+  /** Most-used tags, for the quick-filter chips. */
+  listTags(limit = 40): { tag: string; count: number }[] {
+    const rows = this.db
+      .prepare('SELECT tag, COUNT(*) AS count FROM image_tags GROUP BY tag ORDER BY count DESC, tag LIMIT ?')
+      .all(limit) as { tag: string; count: number }[];
+    return rows.map(({ tag, count }) => ({ tag, count }));
+  }
+
+  updateImage(id: number, patch: { saved?: boolean; notes?: string | null; tags?: string[] }): ImageRow {
     this.getImageRow(id);
     if (patch.saved !== undefined) this.db.prepare('UPDATE images SET saved = ? WHERE id = ?').run(patch.saved ? 1 : 0, id);
     if (patch.notes !== undefined) this.db.prepare('UPDATE images SET notes = ? WHERE id = ?').run(patch.notes, id);
+    if (patch.tags !== undefined) this.writeTags(id, normalizeTags(patch.tags));
     return this.getImageRow(id);
+  }
+
+  tagsFor(imageId: number): string[] {
+    return (this.db.prepare('SELECT tag FROM image_tags WHERE image_id = ? ORDER BY rowid').all(imageId) as { tag: string }[]).map(
+      (r) => r.tag,
+    );
   }
 
   getImageRow(id: number): ImageRow {
@@ -223,11 +357,25 @@ export class ImageService {
 
   getBatchRow(id: number): BatchRow {
     const row = this.db.prepare('SELECT * FROM image_batches WHERE id = ?').get(id) as BatchRow | undefined;
-    if (!row) throw new NotFoundError(`Batch ${id} not found`);
+    if (!row) throw new NotFoundError(`Generation ${id} not found`);
     return row;
   }
 
-  private imagesForBatch(batchId: number): ImageRow[] {
-    return this.db.prepare('SELECT * FROM images WHERE batch_id = ? ORDER BY id').all(batchId) as ImageRow[];
+  /** Replaces an image's tags in one transaction. */
+  private writeTags(imageId: number, tags: string[]): void {
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM image_tags WHERE image_id = ?').run(imageId);
+      const insert = this.db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag) VALUES (?, ?)');
+      for (const tag of tags) insert.run(imageId, tag);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
+}
+
+function searchTerms(q: string | undefined): string[] {
+  return [...new Set((q ?? '').toLowerCase().split(/[\s,]+/).map((t) => t.replace(/^#/, '').trim()).filter(Boolean))].slice(0, 8);
 }

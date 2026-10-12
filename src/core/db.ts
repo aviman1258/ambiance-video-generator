@@ -67,6 +67,18 @@ const MIGRATIONS: string[] = [
     ref_id     INTEGER NOT NULL
   );
   `,
+  `
+  -- Small renditions for the grids (thumb) and the image page (preview); the original stays in file_path.
+  ALTER TABLE images ADD COLUMN thumb_path TEXT;
+  ALTER TABLE images ADD COLUMN preview_path TEXT;
+
+  CREATE TABLE image_tags (
+    image_id  INTEGER NOT NULL REFERENCES images(id),
+    tag       TEXT    NOT NULL,
+    PRIMARY KEY (image_id, tag)
+  );
+  CREATE INDEX image_tags_tag ON image_tags(tag);
+  `,
 ];
 
 export type Db = DatabaseSync;

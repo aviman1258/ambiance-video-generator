@@ -29,7 +29,17 @@ const CreateBatchBody = z.object({
   parentBatchId: Id.optional(),
   referenceImageId: Id.optional(),
 });
-const PatchImageBody = z.object({ saved: z.boolean().optional(), notes: z.string().max(2000).nullable().optional() });
+const PatchImageBody = z.object({
+  saved: z.boolean().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  tags: z.array(z.string().max(100)).max(50).optional(),
+});
+const ListImagesQuery = z.object({
+  q: z.string().max(200).optional(),
+  saved: z.enum(['1', 'true']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(60),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 const CreateAnimationBody = z.object({ imageId: Id, motionPrompt: z.string().max(2000).optional() });
 const PatchAnimationBody = z.object({ starred: z.boolean() });
 
@@ -58,7 +68,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // The page itself.
   await app.register(fastifyStatic, { root: path.resolve(import.meta.dirname, '../../web'), prefix: '/' });
 
-  const withUrl = (img: ImageRow) => ({ ...img, saved: !!img.saved, url: `/assets/${img.file_path}` });
+  const withUrl = <T extends ImageRow>(img: T) => ({
+    ...img,
+    saved: !!img.saved,
+    url: `/assets/${img.file_path}`,
+    thumbUrl: `/assets/${img.thumb_path ?? img.file_path}`,
+    previewUrl: `/assets/${img.preview_path ?? img.file_path}`,
+  });
   const animationView = (a: AnimationRow) => ({ ...a, starred: !!a.starred, url: a.file_path ? `/assets/${a.file_path}` : null });
 
   app.get('/api/config', async () => ({
@@ -67,40 +83,42 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     imageModel: images.generator.model,
     videoModel: animations.generator.model,
     imagesPerBatch: config.imagesPerBatch,
-    batchCostUsd: config.imagesPerBatch * images.generator.costPerImageUsd,
+    generationCostUsd: images.generationCostUsd(),
     animationCostUsd: animations.estimateCostUsd(),
     stylePresets: Object.values(STYLE_PRESETS).map(({ id, label }) => ({ id, label })),
     spend: cost.summary(),
   }));
 
-  app.get('/api/batches', async (req) => {
-    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(req.query);
-    return images.listBatches(limit).map((b) => ({ ...b, images: b.images.map(withUrl) }));
-  });
-
-  app.post('/api/batches', async (req, reply) => {
+  // A generation = one Generate click. Start it, then poll until it's no longer "running".
+  app.post('/api/generations', async (req, reply) => {
     const body = CreateBatchBody.parse(req.body ?? {});
     const { batch } = images.createBatch(body);
     return reply.code(202).send({ ...batch, images: [] });
   });
 
-  app.get('/api/batches/:id', async (req) => {
+  app.get('/api/generations/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
     const batch = images.getBatch(id);
     return { ...batch, images: batch.images.map(withUrl) };
   });
 
-  app.get('/api/images/saved', async () => images.listSaved().map(withUrl));
+  app.get('/api/images', async (req) => {
+    const query = ListImagesQuery.parse(req.query);
+    const { items, total } = images.listImages({ q: query.q, saved: !!query.saved, limit: query.limit, offset: query.offset });
+    return { items: items.map(withUrl), total };
+  });
+
+  app.get('/api/tags', async () => images.listTags());
 
   app.get('/api/images/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
-    const image = images.getImageRow(id);
-    return { ...withUrl(image), scene_prompt: images.getBatchRow(image.batch_id).scene_prompt };
+    return withUrl(images.getImageDetail(id));
   });
 
   app.patch('/api/images/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
-    return withUrl(images.updateImage(id, PatchImageBody.parse(req.body ?? {})));
+    images.updateImage(id, PatchImageBody.parse(req.body ?? {}));
+    return withUrl(images.getImageDetail(id));
   });
 
   app.get('/api/images/:id/motion-suggestion', async (req) => {
