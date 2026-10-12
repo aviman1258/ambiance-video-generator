@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Db } from './db.ts';
@@ -20,9 +20,17 @@ export class AssetStore {
     const absPath = this.abs(relPath);
     if (!fs.existsSync(absPath)) {
       await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
-      const tmp = `${absPath}.${process.pid}.tmp`;
+      // Unique temp name: two saves of identical bytes at the same moment (e.g. two takes) must not
+      // share one temp file.
+      const tmp = `${absPath}.${process.pid}.${randomUUID()}.tmp`;
       await fs.promises.writeFile(tmp, bytes);
-      await fs.promises.rename(tmp, absPath);
+      try {
+        await fs.promises.rename(tmp, absPath);
+      } catch (err) {
+        await fs.promises.rm(tmp, { force: true });
+        // Another save of the same content won the race; the file is there, which is all we need.
+        if (!fs.existsSync(absPath)) throw err;
+      }
     }
     return { relPath, absPath, sha256, bytes: bytes.length };
   }
