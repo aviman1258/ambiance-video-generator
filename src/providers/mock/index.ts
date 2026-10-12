@@ -1,6 +1,9 @@
-import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import type { ImageData, ImageGenerator, ImageRequest, VideoGenerator, VideoStatus } from '../types.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { runFfmpeg } from '../../core/ffmpeg.ts';
+import type { ImageData, ImageGenerator, ImageRequest, SoundGenerator, VideoGenerator, VideoStatus } from '../types.ts';
 import { encodePng } from './png.ts';
 
 /**
@@ -82,4 +85,28 @@ function hsl(hDeg: number, s: number, l: number): [number, number, number] {
     return p;
   };
   return [f(h + 1 / 3), f(h), f(h - 1 / 3)].map((v) => Math.round(v * 255)) as [number, number, number];
+}
+
+/** Free stand-in for Stable Audio: shaped noise from ffmpeg, a different colour per category. */
+export class MockSoundGenerator implements SoundGenerator {
+  readonly provider = 'mock';
+  readonly model = 'mock-noise';
+  readonly costPerSoundUsd = 0;
+  readonly license = 'Synthetic test noise (mock mode).';
+
+  async generate(req: { prompt: string; seconds: number }): Promise<{ bytes: Buffer; ext: string }> {
+    const colors = ['pink', 'brown', 'white'];
+    const color = colors[hash(req.prompt) % colors.length];
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ambiance-mocksound-'));
+    try {
+      const out = path.join(dir, 'sound.mp3');
+      await runFfmpeg([
+        '-f', 'lavfi', '-i', `anoisesrc=color=${color}:duration=${Math.min(req.seconds, 30)}:amplitude=0.25:sample_rate=44100`,
+        '-af', 'lowpass=f=4000,aformat=channel_layouts=stereo', '-c:a', 'libmp3lame', '-b:a', '128k', out,
+      ]);
+      return { bytes: await fs.promises.readFile(out), ext: 'mp3' };
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  }
 }

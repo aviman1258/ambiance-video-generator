@@ -101,6 +101,29 @@ const MIGRATIONS: string[] = [
   -- Gemini's motion plan for an image ({ summary, takes[] }), cached so reopening Animate is instant.
   ALTER TABLE images ADD COLUMN motion_plan TEXT;
   `,
+  `
+  -- Ambient sound library: every generated sound is kept and reused by later scenes.
+  CREATE TABLE sounds (
+    id           INTEGER PRIMARY KEY,
+    category     TEXT    NOT NULL, -- rain | wind | city | birds | …
+    tags         TEXT    NOT NULL, -- space-separated, for matching
+    description  TEXT    NOT NULL, -- the prompt it was generated from
+    duration_s   REAL,
+    provider     TEXT    NOT NULL,
+    model        TEXT    NOT NULL,
+    file_path    TEXT    NOT NULL,
+    license      TEXT    NOT NULL,
+    cost_usd     REAL    NOT NULL,
+    use_count    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT    NOT NULL
+  );
+  CREATE INDEX sounds_category ON sounds(category);
+
+  ALTER TABLE animations ADD COLUMN sound_layers TEXT;  -- JSON: [{ description, category, tags, level, sound_id? }]
+  ALTER TABLE animations ADD COLUMN sound_status TEXT;  -- NULL/off | pending | running | succeeded | failed
+  ALTER TABLE animations ADD COLUMN sound_error TEXT;
+  ALTER TABLE animations ADD COLUMN mixed_path TEXT;    -- the loop with the ambient mix baked in
+  `,
 ];
 
 export type Db = DatabaseSync;

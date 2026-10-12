@@ -16,7 +16,7 @@ export async function requestJson(
 
 export async function requestBytes(
   url: string,
-  init: { headers?: Record<string, string>; timeoutMs?: number; retries?: number },
+  init: { method?: string; headers?: Record<string, string>; body?: unknown; timeoutMs?: number; retries?: number },
 ): Promise<Buffer> {
   const res = await request(url, init);
   return Buffer.from(await res.arrayBuffer());
@@ -29,10 +29,12 @@ async function request(
   const retries = init.retries ?? 2;
   for (let attempt = 0; ; attempt++) {
     try {
+      // FormData (multipart) goes as-is so fetch sets the boundary; anything else is sent as JSON.
+      const multipart = init.body instanceof FormData;
       const res = await fetch(url, {
         method: init.method ?? 'GET',
-        headers: { ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}), ...init.headers },
-        body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+        headers: { ...(init.body !== undefined && !multipart ? { 'content-type': 'application/json' } : {}), ...init.headers },
+        body: init.body === undefined ? undefined : multipart ? (init.body as FormData) : JSON.stringify(init.body),
         signal: AbortSignal.timeout(init.timeoutMs ?? 120_000),
       });
       if (res.ok) return res;
@@ -56,14 +58,25 @@ async function request(
 }
 
 /**
- * A readable one-liner. Google errors are JSON ({ error: { message } }), so show just the message
- * plus which call failed, e.g. "Google rejected predictLongRunning (HTTP 400): …".
+ * A readable one-liner: just the provider's message plus which call failed, e.g.
+ * "Google rejected predictLongRunning (HTTP 400): …". Google errors look like { error: { message } };
+ * Stability's like { name, errors: [ … ] }.
  */
 function describe(url: string, status: number, body: string): string {
-  const call = new URL(url).pathname.split('/').pop()?.split(':').pop() ?? 'request';
+  const { hostname, pathname } = new URL(url);
+  const call = pathname.split('/').pop()?.split(':').pop() ?? 'request';
+  const who = hostname.includes('stability') ? 'Stability' : hostname.includes('google') ? 'Google' : hostname;
   try {
-    const message = (JSON.parse(body) as { error?: { message?: unknown } }).error?.message;
-    if (typeof message === 'string' && message) return `Google rejected ${call} (HTTP ${status}): ${message}`;
+    const json = JSON.parse(body) as { error?: { message?: unknown }; errors?: unknown; message?: unknown };
+    const message =
+      typeof json.error?.message === 'string'
+        ? json.error.message
+        : Array.isArray(json.errors)
+          ? json.errors.map(String).join('; ')
+          : typeof json.message === 'string'
+            ? json.message
+            : undefined;
+    if (message) return `${who} rejected ${call} (HTTP ${status}): ${message}`;
   } catch {
     // not JSON; fall through
   }

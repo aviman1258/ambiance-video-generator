@@ -24,8 +24,35 @@ export interface ImageTagger {
   tag(req: { image: ImageData; scenePrompt: string }): Promise<string[]>;
 }
 
-/** A plan for animating one image: a short description and one complete Veo prompt per take. */
-export type MotionPlan = { summary: string; takes: string[] };
+export const SOUND_CATEGORIES = [
+  'rain', 'wind', 'thunder', 'water', 'waves', 'birds', 'insects', 'city', 'traffic',
+  'crowd', 'cafe', 'train', 'fire', 'interior', 'bells', 'nature',
+] as const;
+export type SoundCategory = (typeof SOUND_CATEGORIES)[number];
+
+/** One ambient layer for a scene, loudest first. `description` is the text-to-audio prompt. */
+export type SoundLayerPlan = {
+  category: SoundCategory;
+  tags: string[];
+  level: 'main' | 'medium' | 'low';
+  description: string;
+};
+
+/**
+ * A plan for animating one image: a short description, one complete Veo prompt per take, and the
+ * ambient sound layers the scene would really have.
+ */
+export type MotionPlan = { summary: string; takes: string[]; sounds?: SoundLayerPlan[] };
+
+/** Makes an ambient sound from a text description. */
+export interface SoundGenerator {
+  readonly provider: string;
+  readonly model: string;
+  readonly costPerSoundUsd: number;
+  /** Plain-language licence note stored with every sound it makes. */
+  readonly license: string;
+  generate(req: { prompt: string; seconds: number }): Promise<{ bytes: Buffer; ext: string }>;
+}
 
 /** Looks at an image and writes Veo motion prompts that suit it. */
 export interface MotionPlanner {

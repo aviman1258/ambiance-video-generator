@@ -79,7 +79,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const animationView = (a: AnimationRow & Partial<AnimationWithImage>) => ({
     ...a,
     starred: !!a.starred,
-    url: a.file_path ? `/assets/${a.file_path}` : null,
+    // The version with ambient sound when there is one, else the silent loop.
+    url: a.mixed_path ? `/assets/${a.mixed_path}` : a.file_path ? `/assets/${a.file_path}` : null,
+    silentUrl: a.file_path ? `/assets/${a.file_path}` : null,
+    hasSound: !!a.mixed_path,
+    soundLayers: a.sound_layers ? (JSON.parse(a.sound_layers) as { category: string; level: string; description: string }[]) : [],
     ...(a.image_file_path
       ? {
           imageThumbUrl: `/assets/${a.image_thumb_path ?? a.image_file_path}`,
@@ -97,6 +101,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     generationCostUsd: images.generationCostUsd(),
     animationCostUsd: animations.estimateCostUsd(),
     animationTakes: animations.takes,
+    soundEnabled: !!animations.sounds,
     stylePresets: Object.values(STYLE_PRESETS).map(({ id, label }) => ({ id, label })),
     spend: cost.summary(),
   }));
@@ -173,6 +178,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     animations.setStarred(id, PatchAnimationBody.parse(req.body ?? {}).starred);
     return animationView(animations.getWithImage(id));
   });
+
+  // Add (or redo) the ambient sound on a finished animation.
+  app.post('/api/animations/:id/sound', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    await animations.addSoundTo(id);
+    return reply.code(202).send(animationView(animations.getWithImage(id)));
+  });
+
+  app.get('/api/sounds', async () =>
+    animations.sounds
+      ? animations.sounds.list().map((s) => ({ ...s, url: `/assets/${s.file_path}`, tags: s.tags.split(' ') }))
+      : [],
+  );
 
   app.delete('/api/animations/:id', async (req, reply) => {
     const { id } = IdParams.parse(req.params);

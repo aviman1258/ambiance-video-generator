@@ -79,6 +79,7 @@
 
           <div id="animate-panel" class="inline-panel" hidden>
             <p id="motion-summary" class="plan-summary"></p>
+            <p id="sound-summary" class="plan-summary" hidden></p>
             <details id="motion-details">
               <summary>See or edit the motion prompts</summary>
               <div id="motion-takes"></div>
@@ -119,6 +120,10 @@
       <div class="overlay-inner">
         <div class="panel image-panel">
           <div id="animation-media"></div>
+          <div class="row">
+            <button id="sound-toggle" hidden>🔊 Sound on</button>
+            <span class="grow"></span>
+          </div>
           <p id="animation-meta" class="hint"></p>
           <p id="animation-error" class="error" hidden></p>
           <div class="row">
@@ -126,6 +131,10 @@
             <a id="animation-file-link" class="button-link" target="_blank" rel="noopener" hidden>Open video file</a>
           </div>
           <p id="animation-note" class="notice" hidden></p>
+          <h3>Sounds</h3>
+          <ul id="animation-sounds" class="takes-list"></ul>
+          <p id="sound-status" class="notice" hidden></p>
+          <div class="row"><button id="add-sound" hidden>Add sounds</button></div>
           <h3>Motion prompts</h3>
           <ol id="animation-takes" class="takes-list"></ol>
         </div>

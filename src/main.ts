@@ -4,6 +4,7 @@ import { loadConfig } from './core/config.ts';
 import { CostGuard } from './core/cost.ts';
 import { openDb } from './core/db.ts';
 import { AnimationService } from './modules/animation/service.ts';
+import { SoundLibrary } from './modules/sound/library.ts';
 import { ImageService } from './modules/images/service.ts';
 import { createProviders } from './providers/index.ts';
 import { buildApp } from './server/app.ts';
@@ -32,11 +33,15 @@ const images = new ImageService({
   imagesPerBatch: config.imagesPerBatch,
   imageSize: config.imageSize,
 });
+const sounds = providers.sounds
+  ? new SoundLibrary({ db, assets, generator: providers.sounds, cost, log, seconds: config.soundSeconds })
+  : undefined;
 const animations = new AnimationService({
   db,
   assets,
   generator: providers.videos,
   planner: providers.planner,
+  sounds,
   takes: config.animationTakes,
   images,
   cost,

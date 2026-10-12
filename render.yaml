@@ -25,6 +25,8 @@ services:
         value: google
       - key: GEMINI_API_KEY
         sync: false
+      - key: STABILITY_API_KEY
+        sync: false
       - key: APP_PASSWORD
         sync: false
       - key: SESSION_SECRET

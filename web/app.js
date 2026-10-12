@@ -378,8 +378,8 @@ function renderAnimations() {
         'a',
         { class: `thumb anim ${a.status}`, href: `#/animation/${a.id}`, title: a.motion_prompt },
         h('img', { src: a.imageThumbUrl, loading: 'lazy', alt: a.scene_prompt }),
-        isRunning(a) ? h('span', { class: 'thumb-label' }, spinner(), a.clip_count > 1 ? ` Animating ${a.clips_done}/${a.clip_count}` : ' Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
-        h('span', { class: 'thumb-badges' }, a.starred && h('span', { class: 'tb star-badge' }, '★ Best')),
+        isRunning(a) ? h('span', { class: 'thumb-label' }, spinner(), progressText(a, true)) : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
+        h('span', { class: 'thumb-badges' }, a.hasSound && h('span', { class: 'tb' }, '🔊'), a.starred && h('span', { class: 'tb star-badge' }, '★ Best')),
       ),
     ),
   );
@@ -420,6 +420,17 @@ async function openFinishedAnimation(id) {
   location.hash = `#/animation/${id}`;
 }
 
+const soundBusy = (a) => a.sound_status === 'pending' || a.sound_status === 'running';
+
+/** "Animating 1/3", or "Adding sound…" once every take is in. */
+function progressText(a, short = false) {
+  if (a.clip_count > 1 && a.clips_done < a.clip_count) {
+    return short ? ` Animating ${a.clips_done}/${a.clip_count}` : `Animating… ${a.clips_done} of ${a.clip_count} takes done`;
+  }
+  if (soundBusy(a)) return short ? ' Adding sound…' : 'Adding sound…';
+  return short ? ' Animating…' : 'Animating… usually a few minutes';
+}
+
 // ---------- one animation ----------
 
 async function openAnimation(id) {
@@ -436,7 +447,7 @@ async function openAnimation(id) {
   if (!location.hash.startsWith(`#/animation/${id}`)) return;
   state.animation = a;
   renderAnimation();
-  if (isRunning(a)) state.timers.animation = setTimeout(() => openAnimation(id), 5000);
+  if (isRunning(a) || soundBusy(a)) state.timers.animation = setTimeout(() => openAnimation(id), 5000);
   else refreshSpend();
 }
 
@@ -445,9 +456,13 @@ function renderAnimation() {
   const media = $('#animation-media');
   const current = media.querySelector('video');
   if (a.status === 'succeeded') {
-    if (!current || current.dataset.id !== String(a.id)) {
-      const video = h('video', { class: 'player', src: a.url, autoplay: true, loop: true, muted: true, playsinline: true, controls: true, 'data-id': String(a.id) });
-      video.muted = true; // the attribute alone doesn't mute in every browser
+    // Swap in the new file when the sound version arrives (or changes).
+    if (!current || current.dataset.src !== a.url) {
+      const wasUnmuted = current && !current.muted;
+      const video = h('video', { class: 'player', src: a.url, autoplay: true, loop: true, muted: true, playsinline: true, controls: true, 'data-src': a.url });
+      // Phones only autoplay muted; the Sound button (a tap) turns it on.
+      video.muted = !wasUnmuted;
+      video.addEventListener('volumechange', () => updateSoundToggle(video));
       media.replaceChildren(video);
     }
   } else {
@@ -462,7 +477,7 @@ function renderAnimation() {
               'span',
               { class: 'player-spinner' },
               spinner(true),
-              h('span', {}, a.clip_count > 1 ? `Animating… ${a.clips_done} of ${a.clip_count} takes done` : 'Animating… usually a few minutes'),
+              h('span', {}, progressText(a)),
             ),
       ),
     );
@@ -477,7 +492,8 @@ function renderAnimation() {
   const file = $('#animation-file-link');
   file.hidden = a.status !== 'succeeded';
   if (a.url) file.href = a.url;
-  $('#delete-animation').hidden = isRunning(a);
+  $('#delete-animation').hidden = isRunning(a) || soundBusy(a);
+  renderAnimationSound(a);
   const best = $('#best-toggle');
   best.hidden = a.status !== 'succeeded';
   best.textContent = a.starred ? '★ Best' : '☆ Best';
@@ -489,6 +505,55 @@ function renderAnimation() {
     ),
   );
 }
+
+function renderAnimationSound(a) {
+  const video = $('#animation-media video');
+  const toggle = $('#sound-toggle');
+  toggle.hidden = !(a.hasSound && video);
+  if (video) updateSoundToggle(video);
+
+  $('#animation-sounds').replaceChildren(
+    ...(a.soundLayers.length ? a.soundLayers.map((l) => h('li', { class: 'take-item' }, soundLabel(l))) : [h('li', { class: 'take-item hint' }, 'No sound yet.')]),
+  );
+  const status = $('#sound-status');
+  status.hidden = !(soundBusy(a) || a.sound_status === 'failed');
+  status.classList.toggle('bad', a.sound_status === 'failed');
+  if (soundBusy(a)) status.replaceChildren(spinner(), ' Adding sound… a minute or so for new sounds.');
+  else if (a.sound_status === 'failed') status.textContent = `Sound failed: ${a.sound_error ?? 'unknown error'}`;
+
+  const add = $('#add-sound');
+  add.hidden = !state.config.soundEnabled || a.status !== 'succeeded' || soundBusy(a);
+  add.textContent = a.hasSound ? 'Redo sounds' : a.sound_status === 'failed' ? 'Try sounds again' : 'Add sounds';
+}
+
+function updateSoundToggle(video) {
+  $('#sound-toggle').textContent = video.muted ? '🔊 Sound on' : '🔇 Sound off';
+}
+
+$('#sound-toggle').addEventListener('click', () => {
+  const video = $('#animation-media video');
+  if (!video) return;
+  video.muted = !video.muted;
+  if (!video.muted) video.play().catch(() => {});
+  updateSoundToggle(video);
+});
+
+onTap($('#add-sound'), async () => {
+  const redo = state.animation.hasSound;
+  const yes = await askConfirm({
+    title: redo ? 'Redo the sounds?' : 'Add sounds to this animation?',
+    body: `Gemini picks ambient layers for the scene. Sounds already in your library are reused; new ones are generated with Stable Audio. ${PAID}`,
+    confirmLabel: redo ? 'Redo sounds' : 'Add sounds',
+  });
+  if (!yes) return;
+  try {
+    state.animation = { ...state.animation, ...(await api(`/api/animations/${state.animation.id}/sound`, { method: 'POST' })) };
+  } catch (e) {
+    showError($('#animation-error'), e);
+    return;
+  }
+  openAnimation(state.animation.id);
+});
 
 onTap($('#delete-animation'), async () => {
   const yes = await askConfirm({
@@ -646,7 +711,8 @@ onTap($('#toggle-animate'), async () => {
   const takes = state.config.animationTakes;
   $('#animate-hint').textContent =
     `${takes} takes of 8 seconds at 1080p, each starting and ending on this image, joined into one ${takes * 8}-second loop. ` +
-    `Veo's own sound is removed. It takes a few minutes and opens in the Animations tab when it's done.`;
+    (state.config.soundEnabled ? `Veo's own sound is replaced with ambient sound for the scene. ` : `Veo's own sound is removed. `) +
+    `It takes a few minutes and opens in the Animations tab when it's done.`;
   panel.hidden = false;
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   if (state.motionFor !== state.image.id) await loadMotionPlan(state.image.id);
@@ -677,8 +743,18 @@ async function loadMotionPlan(imageId) {
     plan.warning ? h('span', { class: 'plan-warning' }, ` ${plan.warning}`) : '',
   );
   renderMotionTakes(plan.takes);
+  const sounds = $('#sound-summary');
+  sounds.hidden = !state.config.soundEnabled || !plan.sounds?.length;
+  if (!sounds.hidden) sounds.replaceChildren(h('strong', {}, 'Sounds: '), plan.sounds.map(soundLabel).join(' · '));
   $('#motion-details').hidden = false;
   start.disabled = false;
+}
+
+/** "Rain (main): monsoon, heavy, tin roof" */
+function soundLabel(layer) {
+  const name = layer.category.charAt(0).toUpperCase() + layer.category.slice(1);
+  const level = layer.level === 'main' ? ' (main)' : layer.level === 'low' ? ' (distant)' : '';
+  return `${name}${level}${layer.tags?.length ? `: ${layer.tags.slice(0, 3).join(', ')}` : ''}`;
 }
 
 function renderMotionTakes(takes) {
@@ -720,7 +796,10 @@ async function init() {
   onTap($('#start-animation'), async () => {
     const yes = await askConfirm({
       title: 'Start this animation?',
-      body: `Veo makes ${state.config.animationTakes} eight-second takes and joins them into a ${state.config.animationTakes * 8}-second loop. It takes a few minutes and costs a few times more than an image. ${PAID}`,
+      body:
+        `Veo makes ${state.config.animationTakes} eight-second takes and joins them into a ${state.config.animationTakes * 8}-second loop` +
+        (state.config.soundEnabled ? ', then adds ambient sound for the scene' : '') +
+        `. It takes a few minutes and costs a few times more than an image. ${PAID}`,
       confirmLabel: 'Start animation',
     });
     if (!yes) return;

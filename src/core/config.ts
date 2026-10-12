@@ -21,6 +21,10 @@ const EnvSchema = z
     ANIMATION_TAKES: z.coerce.number().int().min(1).max(4).default(3),
     MOTION_MODEL: z.string().default('gemini-3.8-flash'),
     MOTION_COST_USD: z.coerce.number().nonnegative().default(0.004),
+    STABILITY_API_KEY: z.string().optional(),
+    SOUND_MODEL: z.string().default('stable-audio-2.5'),
+    SOUND_SECONDS: z.coerce.number().int().min(10).max(190).default(120),
+    SOUND_COST_USD: z.coerce.number().nonnegative().default(0.2),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     APP_PASSWORD: z.string().min(12, 'APP_PASSWORD must be at least 12 characters').optional(),
     SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters').optional(),
@@ -63,6 +67,11 @@ export type Config = {
   animationTakes: number;
   motionModel: string;
   motionCostUsd: number;
+  /** Ambient sounds: generated with Stable Audio when a key is set (mock noise in mock mode). */
+  stabilityApiKey: string | undefined;
+  soundModel: string;
+  soundSeconds: number;
+  soundCostUsd: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   /** When set, the whole app sits behind a password login. */
   auth: { password: string; secret: string } | undefined;
@@ -98,6 +107,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     animationTakes: e.ANIMATION_TAKES,
     motionModel: e.MOTION_MODEL,
     motionCostUsd: e.MOTION_COST_USD,
+    stabilityApiKey: e.STABILITY_API_KEY,
+    soundModel: e.SOUND_MODEL,
+    soundSeconds: e.SOUND_SECONDS,
+    soundCostUsd: e.SOUND_COST_USD,
     logLevel: e.LOG_LEVEL,
     auth: e.APP_PASSWORD && e.SESSION_SECRET ? { password: e.APP_PASSWORD, secret: e.SESSION_SECRET } : undefined,
     trustProxy: e.TRUST_PROXY,

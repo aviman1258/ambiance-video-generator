@@ -2,11 +2,14 @@ import { type AssetStore, removeOrphans } from '../../core/assets.ts';
 import type { CostGuard } from '../../core/cost.ts';
 import { type Db, now } from '../../core/db.ts';
 import { joinClipsSilently } from '../../core/ffmpeg.ts';
+import { mp4DurationSeconds } from '../../core/mp4.ts';
 import type { Logger } from '../../core/log.ts';
-import { type ImageData, type MotionPlan, type MotionPlanner, ProviderError, type VideoGenerator } from '../../providers/types.ts';
+import { type ImageData, type MotionPlan, type MotionPlanner, ProviderError, type SoundLayerPlan, type VideoGenerator } from '../../providers/types.ts';
 import { BadRequestError, ConflictError, type ImageService, NotFoundError } from '../images/service.ts';
 import { videoFrame } from '../images/renditions.ts';
-import { keywordMotionPlan } from './motion.ts';
+import type { SoundLibrary } from '../sound/library.ts';
+import { LEVEL_DB, mixLoop } from '../sound/mix.ts';
+import { keywordMotionPlan, keywordSoundLayers } from './motion.ts';
 
 export type AnimationStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -27,6 +30,10 @@ export type AnimationRow = {
   error: string | null;
   clip_count: number;
   note: string | null;
+  sound_layers: string | null; // JSON SoundLayerPlan[] (+ sound_id once resolved)
+  sound_status: 'off' | 'pending' | 'running' | 'succeeded' | 'failed' | null;
+  sound_error: string | null;
+  mixed_path: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -77,6 +84,8 @@ export class AnimationService {
   readonly assets: AssetStore;
   readonly generator: VideoGenerator;
   readonly planner: MotionPlanner;
+  /** Undefined when sound is off. */
+  readonly sounds: SoundLibrary | undefined;
   readonly images: ImageService;
   readonly cost: CostGuard;
   readonly log: Logger;
@@ -90,6 +99,7 @@ export class AnimationService {
     assets: AssetStore;
     generator: VideoGenerator;
     planner: MotionPlanner;
+    sounds?: SoundLibrary;
     images: ImageService;
     cost: CostGuard;
     log: Logger;
@@ -100,6 +110,7 @@ export class AnimationService {
     this.assets = deps.assets;
     this.generator = deps.generator;
     this.planner = deps.planner;
+    this.sounds = deps.sounds;
     this.images = deps.images;
     this.cost = deps.cost;
     this.log = deps.log;
@@ -144,7 +155,8 @@ export class AnimationService {
     if (!row?.motion_plan) return undefined;
     try {
       const plan = JSON.parse(row.motion_plan) as PlanResult;
-      return Array.isArray(plan.takes) && plan.takes.length === this.takes ? plan : undefined;
+      const soundsOk = !this.sounds || (Array.isArray(plan.sounds) && plan.sounds.length > 0);
+      return Array.isArray(plan.takes) && plan.takes.length === this.takes && soundsOk ? plan : undefined;
     } catch {
       return undefined;
     }
@@ -155,11 +167,15 @@ export class AnimationService {
    * prompts). The same image + prompts already in flight returns that animation instead, so a double
    * tap can't pay twice.
    */
-  create(input: { imageId: number; motionPrompts?: string[] }): AnimationRow {
+  create(input: { imageId: number; motionPrompts?: string[]; soundLayers?: SoundLayerPlan[] }): AnimationRow {
     const image = this.images.getImageRow(input.imageId);
+    const scenePrompt = this.images.getBatchRow(image.batch_id).scene_prompt;
+    const soundLayers = this.sounds
+      ? (input.soundLayers?.length ? input.soundLayers : (this.cachedPlan(input.imageId)?.sounds ?? keywordSoundLayers(scenePrompt)))
+      : undefined;
     let prompts = (input.motionPrompts ?? []).map((p) => p.trim()).filter(Boolean);
     if (prompts.length === 0) {
-      prompts = this.cachedPlan(input.imageId)?.takes ?? keywordMotionPlan(this.images.getBatchRow(image.batch_id).scene_prompt, this.takes).takes;
+      prompts = this.cachedPlan(input.imageId)?.takes ?? keywordMotionPlan(scenePrompt, this.takes).takes;
     }
     if (prompts.length > MAX_TAKES) throw new BadRequestError(`At most ${MAX_TAKES} takes per animation`);
     if (prompts.some((p) => p.length > 2000)) throw new BadRequestError('A motion prompt is too long (2000 characters max)');
@@ -172,7 +188,7 @@ export class AnimationService {
 
     const clipCost = this.generator.estimateCostUsd(CLIP_SECONDS);
     const estimate = Math.round(prompts.length * clipCost * 10_000) / 10_000;
-    this.cost.assertCanSpend(estimate, 'This animation');
+    this.cost.assertCanSpend(estimate + (soundLayers ? this.sounds!.estimateNewSoundsUsd(soundLayers) : 0), 'This animation');
     const ts = now();
     this.db.exec('BEGIN');
     let id: number;
@@ -180,10 +196,23 @@ export class AnimationService {
       const res = this.db
         .prepare(
           `INSERT INTO animations (image_id, motion_prompt, provider, model, duration_s, resolution, loop_mode,
-             estimated_cost_usd, status, clip_count, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'same-first-last', ?, 'pending', ?, ?, ?)`,
+             estimated_cost_usd, status, clip_count, sound_layers, sound_status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'same-first-last', ?, 'pending', ?, ?, ?, ?, ?)`,
         )
-        .run(input.imageId, joined, this.generator.provider, this.generator.model, prompts.length * CLIP_SECONDS, RESOLUTION, estimate, prompts.length, ts, ts);
+        .run(
+          input.imageId,
+          joined,
+          this.generator.provider,
+          this.generator.model,
+          prompts.length * CLIP_SECONDS,
+          RESOLUTION,
+          estimate,
+          prompts.length,
+          soundLayers ? JSON.stringify(soundLayers) : null,
+          soundLayers ? 'pending' : 'off',
+          ts,
+          ts,
+        );
       id = Number(res.lastInsertRowid);
       const insertClip = this.db.prepare(
         `INSERT INTO animation_clips (animation_id, idx, motion_prompt, estimated_cost_usd, status, updated_at)
@@ -216,7 +245,32 @@ export class AnimationService {
       }
       this.track(row.id, this.watchAllThenJoin(row.id));
     }
-    return rows.length;
+    // Finished animations whose sound was being added when the server stopped.
+    const mixing = this.db
+      .prepare("SELECT id FROM animations WHERE status = 'succeeded' AND sound_status IN ('pending', 'running')")
+      .all() as { id: number }[];
+    for (const { id } of mixing) this.trackSound(id, this.addSound(id));
+    return rows.length + mixing.length;
+  }
+
+  /**
+   * Adds (or redoes) the ambient sound for a finished animation, e.g. one made before sound
+   * existed. Uses the image's sound plan, re-planning it if the cached plan predates sound.
+   */
+  async addSoundTo(id: number): Promise<AnimationRow> {
+    if (!this.sounds) throw new BadRequestError('Sound is off: add STABILITY_API_KEY to turn it on.');
+    const row = this.get(id);
+    if (row.status !== 'succeeded') throw new ConflictError('Wait for the animation to finish first.');
+    if (row.sound_status === 'pending' || row.sound_status === 'running') return row;
+    const plan = await this.planMotion(row.image_id);
+    const image = this.images.getImageRow(row.image_id);
+    const layers = plan.sounds?.length ? plan.sounds : keywordSoundLayers(this.images.getBatchRow(image.batch_id).scene_prompt);
+    this.cost.assertCanSpend(this.sounds.estimateNewSoundsUsd(layers), 'The sounds');
+    this.db
+      .prepare("UPDATE animations SET sound_layers = ?, sound_status = 'pending', sound_error = NULL, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(layers), now(), id);
+    this.trackSound(id, this.addSound(id));
+    return this.get(id);
   }
 
   get(id: number): AnimationRow {
@@ -255,7 +309,7 @@ export class AnimationService {
   /** Deletes a finished (or failed) animation, its takes and their files. In-progress ones can't be deleted. */
   async delete(id: number): Promise<void> {
     const row = this.get(id);
-    if (row.status === 'pending' || row.status === 'running') {
+    if (row.status === 'pending' || row.status === 'running' || row.sound_status === 'running') {
       throw new ConflictError('This animation is still being made. Delete it once it finishes.');
     }
     const clipFiles = this.clipsFor(id).map((c) => c.file_path);
@@ -268,7 +322,7 @@ export class AnimationService {
       this.db.exec('ROLLBACK');
       throw err;
     }
-    await removeOrphans(this.db, this.assets, [row.file_path, ...clipFiles]);
+    await removeOrphans(this.db, this.assets, [row.file_path, row.mixed_path, ...clipFiles]);
     this.log.info({ animationId: id }, 'animation deleted');
   }
 
@@ -289,6 +343,15 @@ export class AnimationService {
       })
       .finally(() => this.active.delete(id));
     this.active.set(id, p);
+  }
+
+  /** Like track(), but a sound failure only marks the sound failed: the silent loop stays usable. */
+  private trackSound(id: number, work: Promise<void>): void {
+    const key = -id; // separate slot from the animation's own work
+    const p = work
+      .catch((err: Error) => this.soundFailed(id, err.message))
+      .finally(() => this.active.delete(key));
+    this.active.set(key, p);
   }
 
   private async run(id: number): Promise<void> {
@@ -383,9 +446,52 @@ export class AnimationService {
     const stored = await this.assets.put(bytes, 'mp4');
     const note = bad.length ? `${bad.length} of ${clips.length} takes failed, so this loop is shorter: ${bad[0]!.error}` : null;
     this.db
-      .prepare("UPDATE animations SET status = 'succeeded', file_path = ?, duration_s = ?, note = ?, error = NULL, updated_at = ? WHERE id = ?")
+      .prepare('UPDATE animations SET file_path = ?, duration_s = ?, note = ?, error = NULL, updated_at = ? WHERE id = ?')
       .run(stored.relPath, good.length * CLIP_SECONDS, note, now(), id);
     this.log.info({ animationId: id, takes: good.length, failed: bad.length }, 'animation joined');
+    // Sound goes in before the animation counts as done, so it opens with sound. A sound failure
+    // still leaves the silent loop.
+    if (this.get(id).sound_status === 'pending') {
+      try {
+        await this.addSound(id);
+      } catch (err) {
+        this.soundFailed(id, (err as Error).message);
+      }
+    }
+    this.db.prepare("UPDATE animations SET status = 'succeeded', updated_at = ? WHERE id = ?").run(now(), id);
+  }
+
+  /** Resolves each layer to a library sound (generating any that are missing) and bakes the mix into the loop. */
+  private async addSound(id: number): Promise<void> {
+    if (!this.sounds) return;
+    this.db.prepare("UPDATE animations SET sound_status = 'running', updated_at = ? WHERE id = ?").run(now(), id);
+    const row = this.get(id);
+    const layers = JSON.parse(row.sound_layers ?? '[]') as (SoundLayerPlan & { sound_id?: number })[];
+    if (!row.file_path || layers.length === 0) throw new Error('Nothing to mix');
+    const resolved: { layer: SoundLayerPlan & { sound_id?: number }; path: string; durationS: number | null }[] = [];
+    for (const layer of layers) {
+      const sound = await this.sounds.ensure(layer);
+      layer.sound_id = sound.id;
+      resolved.push({ layer, path: this.assets.abs(sound.file_path), durationS: sound.duration_s });
+    }
+    const video = await this.assets.read(row.file_path);
+    const bytes = await mixLoop({
+      videoPath: this.assets.abs(row.file_path),
+      durationS: mp4DurationSeconds(video) ?? row.duration_s,
+      layers: resolved.map((r) => ({ path: r.path, durationS: r.durationS, gainDb: LEVEL_DB[r.layer.level] ?? -7 })),
+    });
+    const stored = await this.assets.put(bytes, 'mp4');
+    const previous = row.mixed_path;
+    this.db
+      .prepare("UPDATE animations SET mixed_path = ?, sound_layers = ?, sound_status = 'succeeded', sound_error = NULL, updated_at = ? WHERE id = ?")
+      .run(stored.relPath, JSON.stringify(layers), now(), id);
+    if (previous && previous !== stored.relPath) await removeOrphans(this.db, this.assets, [previous]);
+    this.log.info({ animationId: id, layers: layers.length }, 'sound mixed');
+  }
+
+  private soundFailed(id: number, error: string): void {
+    this.db.prepare("UPDATE animations SET sound_status = 'failed', sound_error = ?, updated_at = ? WHERE id = ?").run(error.slice(0, 2000), now(), id);
+    this.log.warn({ animationId: id, error }, 'sound failed');
   }
 
   /** Older single-take animations started before takes existed. */

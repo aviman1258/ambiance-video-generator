@@ -365,6 +365,8 @@ export class ImageService {
         .prepare(
           `SELECT file_path FROM animations WHERE image_id = ?1
            UNION ALL
+           SELECT mixed_path FROM animations WHERE image_id = ?1
+           UNION ALL
            SELECT c.file_path FROM animation_clips c JOIN animations a ON a.id = c.animation_id WHERE a.image_id = ?1`,
         )
         .all(id) as { file_path: string | null }[]

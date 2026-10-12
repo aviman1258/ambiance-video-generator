@@ -6,10 +6,12 @@ import { CostGuard } from '../src/core/cost.ts';
 import { type Db, openDb } from '../src/core/db.ts';
 import { silentLogger } from '../src/core/log.ts';
 import { KeywordMotionPlanner } from '../src/modules/animation/motion.ts';
+import { SoundLibrary } from '../src/modules/sound/library.ts';
+import { MockSoundGenerator } from '../src/providers/mock/index.ts';
 import { AnimationService } from '../src/modules/animation/service.ts';
 import { ImageService } from '../src/modules/images/service.ts';
 import { encodePng } from '../src/providers/mock/png.ts';
-import type { ImageData, ImageGenerator, ImageRequest, ImageTagger, MotionPlan, MotionPlanner, VideoGenerator, VideoRequest, VideoStatus } from '../src/providers/types.ts';
+import type { ImageData, ImageGenerator, ImageRequest, ImageTagger, MotionPlan, MotionPlanner, SoundGenerator, VideoGenerator, VideoRequest, VideoStatus } from '../src/providers/types.ts';
 
 export function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ambiance-test-'));
@@ -99,6 +101,23 @@ export class FakePlanner implements MotionPlanner {
   }
 }
 
+/** Paid-looking sound generator: real (noise) MP3s via the mock, $0.20 each, can be told to fail. */
+export class FakeSoundGenerator implements SoundGenerator {
+  readonly provider = 'fake';
+  readonly model = 'fake-audio';
+  readonly costPerSoundUsd = 0.2;
+  readonly license = 'test';
+  prompts: string[] = [];
+  fail = false;
+  private readonly inner = new MockSoundGenerator();
+
+  async generate(req: { prompt: string; seconds: number }): Promise<{ bytes: Buffer; ext: string }> {
+    this.prompts.push(req.prompt);
+    if (this.fail) throw new Error('Stability rejected text-to-audio (HTTP 402): out of credits');
+    return this.inner.generate({ ...req, seconds: Math.min(req.seconds, 20) });
+  }
+}
+
 export function makeServices(
   opts: {
     dir?: string;
@@ -109,6 +128,8 @@ export function makeServices(
     videoGen?: VideoGenerator;
     perBatch?: number;
     takes?: number;
+    /** Turn ambient sound on with this generator (off by default, to keep most tests fast). */
+    soundGen?: SoundGenerator;
   } = {},
 ) {
   const dir = opts.dir ?? tempDir();
@@ -129,16 +150,20 @@ export function makeServices(
     imagesPerBatch: opts.perBatch ?? 1,
     imageSize: '2K',
   });
+  const sounds = opts.soundGen
+    ? new SoundLibrary({ db, assets, generator: opts.soundGen, cost, log: silentLogger, seconds: 20 })
+    : undefined;
   const animations = new AnimationService({
     db,
     assets,
     generator: videoGen,
     planner,
+    sounds,
     images,
     cost,
     log: silentLogger,
     pollIntervalMs: 5,
     takes: opts.takes ?? 3,
   });
-  return { dir, db, assets, cost, images, animations, imageGen, tagger, planner, videoGen };
+  return { dir, db, assets, cost, images, animations, imageGen, tagger, planner, videoGen, sounds };
 }
