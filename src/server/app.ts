@@ -38,7 +38,11 @@ const ListImagesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(60),
   offset: z.coerce.number().int().min(0).default(0),
 });
-const CreateAnimationBody = z.object({ imageId: Id, motionPrompt: z.string().max(2000).optional() });
+const CreateAnimationBody = z.object({
+  imageId: Id,
+  motionPrompts: z.array(z.string().max(2000)).max(4).optional(),
+  motionPrompt: z.string().max(2000).optional(), // older clients: a single take
+});
 const PatchAnimationBody = z.object({ starred: z.boolean() });
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
@@ -92,6 +96,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     imagesPerBatch: config.imagesPerBatch,
     generationCostUsd: images.generationCostUsd(),
     animationCostUsd: animations.estimateCostUsd(),
+    animationTakes: animations.takes,
     stylePresets: Object.values(STYLE_PRESETS).map(({ id, label }) => ({ id, label })),
     spend: cost.summary(),
   }));
@@ -134,9 +139,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return reply.code(204).send();
   });
 
-  app.get('/api/images/:id/motion-suggestion', async (req) => {
+  // Gemini looks at the image and plans one Veo prompt per take (cached; ?refresh=1 plans again).
+  app.get('/api/images/:id/motion-plan', async (req) => {
     const { id } = IdParams.parse(req.params);
-    return { motionPrompt: animations.suggestMotion(id) };
+    const { refresh } = z.object({ refresh: z.enum(['1', 'true']).optional() }).parse(req.query);
+    return animations.planMotion(id, { refresh: !!refresh });
   });
 
   app.get('/api/animations', async (req) => {
@@ -145,13 +152,20 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   app.post('/api/animations', async (req, reply) => {
-    const row = animations.create(CreateAnimationBody.parse(req.body ?? {}));
+    const body = CreateAnimationBody.parse(req.body ?? {});
+    const row = animations.create({
+      imageId: body.imageId,
+      motionPrompts: body.motionPrompts ?? (body.motionPrompt ? [body.motionPrompt] : undefined),
+    });
     return reply.code(202).send(animationView(row));
   });
 
   app.get('/api/animations/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
-    return animationView(animations.getWithImage(id));
+    return {
+      ...animationView(animations.getWithImage(id)),
+      takes: animations.clipsFor(id).map(({ idx, motion_prompt, status, error }) => ({ idx, motion_prompt, status, error })),
+    };
   });
 
   app.patch('/api/animations/:id', async (req) => {

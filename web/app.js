@@ -18,8 +18,8 @@ const state = {
   animations: [],
   pending: [], // image generations in progress: { id, scene, error? }
   image: null, // the open image
-  motionFor: null, // image id the motion prompt was suggested for
-  suggestedMotion: '',
+  motionFor: null, // image id the motion plan was loaded for
+  plan: null, // { summary, takes[], source, warning? }
   animation: null, // the open animation
   cameFromApp: false,
   timers: { search: null, animations: null, animation: null },
@@ -125,8 +125,8 @@ async function loadConfig() {
 }
 
 function renderSpend(s) {
-  const inflight = s.inFlightUsd > 0 ? ` (+${money(s.inFlightUsd)} in flight)` : '';
-  $('#spend').textContent = `${money(s.spentUsd)}${inflight} of ${money(s.capUsd)}`;
+  const inflight = s.inFlightUsd > 0 ? ` (+${money(s.inFlightUsd)} in progress)` : '';
+  $('#spend').textContent = `${money(s.spentUsd)} spent${inflight}`;
 }
 
 const refreshSpend = async () => renderSpend(await api('/api/spend'));
@@ -378,7 +378,7 @@ function renderAnimations() {
         'a',
         { class: `thumb anim ${a.status}`, href: `#/animation/${a.id}`, title: a.motion_prompt },
         h('img', { src: a.imageThumbUrl, loading: 'lazy', alt: a.scene_prompt }),
-        isRunning(a) ? h('span', { class: 'thumb-label' }, spinner(), ' Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
+        isRunning(a) ? h('span', { class: 'thumb-label' }, spinner(), a.clip_count > 1 ? ` Animating ${a.clips_done}/${a.clip_count}` : ' Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
         h('span', { class: 'thumb-badges' }, a.starred && h('span', { class: 'tb star-badge' }, '★ Best')),
       ),
     ),
@@ -458,11 +458,20 @@ function renderAnimation() {
         h('img', { src: a.imagePreviewUrl, alt: '' }),
         a.status === 'failed'
           ? h('span', { class: 'thumb-label bad' }, 'Failed')
-          : h('span', { class: 'player-spinner' }, spinner(true), h('span', {}, 'Animating… usually a few minutes')),
+          : h(
+              'span',
+              { class: 'player-spinner' },
+              spinner(true),
+              h('span', {}, a.clip_count > 1 ? `Animating… ${a.clips_done} of ${a.clip_count} takes done` : 'Animating… usually a few minutes'),
+            ),
       ),
     );
   }
-  $('#animation-meta').textContent = `#${a.id} · ${a.duration_s}s ${a.resolution} · loops back to the first frame · ${new Date(a.created_at).toLocaleString()}`;
+  const takesText = a.clip_count > 1 ? ` (${a.clip_count} takes)` : '';
+  $('#animation-meta').textContent = `#${a.id} · ${a.duration_s}s${takesText} · ${a.resolution} · seamless loop · ${new Date(a.created_at).toLocaleString()}`;
+  const note = $('#animation-note');
+  note.hidden = !a.note;
+  note.textContent = a.note ?? '';
   showError($('#animation-error'), a.error ? new Error(a.error) : null);
   $('#animation-image-link').href = `#/image/${a.image_id}`;
   const file = $('#animation-file-link');
@@ -473,7 +482,12 @@ function renderAnimation() {
   best.hidden = a.status !== 'succeeded';
   best.textContent = a.starred ? '★ Best' : '☆ Best';
   best.classList.toggle('on', a.starred);
-  $('#animation-motion').textContent = a.motion_prompt;
+  const takes = a.takes?.length ? a.takes : [{ idx: 0, motion_prompt: a.motion_prompt, status: a.status }];
+  $('#animation-takes').replaceChildren(
+    ...takes.map((t) =>
+      h('li', { class: `take-item ${t.status}` }, t.motion_prompt, t.status === 'failed' && t.error ? h('span', { class: 'plan-warning' }, ` (failed: ${t.error})`) : ''),
+    ),
+  );
 }
 
 onTap($('#delete-animation'), async () => {
@@ -629,17 +643,49 @@ onTap($('#toggle-animate'), async () => {
     return;
   }
   showError($('#animate-error'), null);
-  if (state.motionFor !== state.image.id) {
-    const { motionPrompt } = await api(`/api/images/${state.image.id}/motion-suggestion`);
-    state.suggestedMotion = motionPrompt;
-    state.motionFor = state.image.id;
-    $('#motion').value = motionPrompt;
-  }
+  const takes = state.config.animationTakes;
+  $('#animate-hint').textContent =
+    `${takes} takes of 8 seconds at 1080p, each starting and ending on this image, joined into one ${takes * 8}-second loop. ` +
+    `Veo's own sound is removed. It takes a few minutes and opens in the Animations tab when it's done.`;
   panel.hidden = false;
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  if (state.motionFor !== state.image.id) await loadMotionPlan(state.image.id);
 });
 $('#cancel-animate').addEventListener('click', () => ($('#animate-panel').hidden = true));
-$('#reset-motion').addEventListener('click', () => ($('#motion').value = state.suggestedMotion));
+$('#reset-motion').addEventListener('click', () => renderMotionTakes(state.plan.takes));
+
+/** Gemini looks at the image and writes one motion prompt per take (cached on the server). */
+async function loadMotionPlan(imageId) {
+  const start = $('#start-animation');
+  start.disabled = true;
+  $('#motion-details').hidden = true;
+  $('#motion-summary').replaceChildren(spinner(), ' Looking at the image to plan the motion…');
+  let plan;
+  try {
+    plan = await api(`/api/images/${imageId}/motion-plan`);
+  } catch (e) {
+    $('#motion-summary').textContent = '';
+    showError($('#animate-error'), e);
+    return;
+  }
+  if (state.image?.id !== imageId) return;
+  state.plan = plan;
+  state.motionFor = imageId;
+  $('#motion-summary').replaceChildren(
+    plan.source === 'vision' ? h('strong', {}, 'Plan: ') : h('strong', {}, 'Plan (from the description): '),
+    plan.summary,
+    plan.warning ? h('span', { class: 'plan-warning' }, ` ${plan.warning}`) : '',
+  );
+  renderMotionTakes(plan.takes);
+  $('#motion-details').hidden = false;
+  start.disabled = false;
+}
+
+function renderMotionTakes(takes) {
+  $('#motion-takes').replaceChildren(
+    ...takes.map((t, i) => h('label', { class: 'take' }, `Take ${i + 1}`, h('textarea', { rows: '5', class: 'take-prompt' }, t))),
+  );
+}
 
 // ---------- wire up ----------
 
@@ -674,7 +720,7 @@ async function init() {
   onTap($('#start-animation'), async () => {
     const yes = await askConfirm({
       title: 'Start this animation?',
-      body: `Veo makes an 8-second looping clip. It takes a few minutes and costs more than an image. ${PAID}`,
+      body: `Veo makes ${state.config.animationTakes} eight-second takes and joins them into a ${state.config.animationTakes * 8}-second loop. It takes a few minutes and costs a few times more than an image. ${PAID}`,
       confirmLabel: 'Start animation',
     });
     if (!yes) return;
@@ -682,7 +728,8 @@ async function init() {
     showError($('#animate-error'), null);
     let started;
     try {
-      started = await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
+      const motionPrompts = [...document.querySelectorAll('#motion-takes .take-prompt')].map((t) => t.value);
+      started = await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompts } });
     } catch (e) {
       showError($('#animate-error'), e);
       return;

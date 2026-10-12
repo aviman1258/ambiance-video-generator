@@ -79,6 +79,28 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX image_tags_tag ON image_tags(tag);
   `,
+  `
+  -- An animation is now several Veo "takes", each starting and ending on the image, joined into one
+  -- loop with Veo's audio removed. Older single-take animations have no rows here.
+  CREATE TABLE animation_clips (
+    id                  INTEGER PRIMARY KEY,
+    animation_id        INTEGER NOT NULL REFERENCES animations(id),
+    idx                 INTEGER NOT NULL,
+    motion_prompt       TEXT    NOT NULL,
+    estimated_cost_usd  REAL    NOT NULL,
+    operation_id        TEXT,
+    status              TEXT    NOT NULL, -- pending | running | succeeded | failed
+    file_path           TEXT,             -- the raw take as Veo returned it (with audio)
+    error               TEXT,
+    updated_at          TEXT    NOT NULL,
+    UNIQUE (animation_id, idx)
+  );
+  ALTER TABLE animations ADD COLUMN clip_count INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE animations ADD COLUMN note TEXT; -- e.g. "1 of 3 takes failed: …" on a still-usable result
+
+  -- Gemini's motion plan for an image ({ summary, takes[] }), cached so reopening Animate is instant.
+  ALTER TABLE images ADD COLUMN motion_plan TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;

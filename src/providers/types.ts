@@ -24,6 +24,17 @@ export interface ImageTagger {
   tag(req: { image: ImageData; scenePrompt: string }): Promise<string[]>;
 }
 
+/** A plan for animating one image: a short description and one complete Veo prompt per take. */
+export type MotionPlan = { summary: string; takes: string[] };
+
+/** Looks at an image and writes Veo motion prompts that suit it. */
+export interface MotionPlanner {
+  readonly provider: string;
+  readonly model: string;
+  readonly costPerCallUsd: number;
+  plan(req: { image: ImageData; scenePrompt: string; takes: number }): Promise<MotionPlan>;
+}
+
 export type VideoRequest = {
   prompt: string;
   firstFrame: ImageData;

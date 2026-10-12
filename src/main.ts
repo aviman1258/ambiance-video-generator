@@ -36,6 +36,8 @@ const animations = new AnimationService({
   db,
   assets,
   generator: providers.videos,
+  planner: providers.planner,
+  takes: config.animationTakes,
   images,
   cost,
   log,

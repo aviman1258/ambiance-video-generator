@@ -1,3 +1,5 @@
+import type { MotionPlan, MotionPlanner } from '../../providers/types.ts';
+
 // Keyword → in-place motion. Order matters only for how the suggestion reads.
 const MOTION_RULES: { match: RegExp; motion: string }[] = [
   { match: /\b(rain|monsoon|drizzle|storm|downpour)\b/i, motion: 'rain streaming down the window glass and falling steadily outside' },
@@ -25,6 +27,36 @@ export function suggestMotionPrompt(scenePrompt: string): string {
     `The painting stays still except for subtle, continuous ambient motion: ${joinList(list)}.`,
     'No people appear or move. Objects keep their exact shape. Calm, even pacing so the clip loops seamlessly.',
   ].join(' ');
+}
+
+// Variations so keyword-based takes aren't identical.
+const TAKE_FLAVOURS = [
+  'Very calm and slow; the motion is barely there.',
+  'A slightly stronger, steady breeze from the left; light shifts softly.',
+  'Gentle, uneven gusts from the right; shadows and reflections drift a little.',
+  'Almost still at first, then a soft swell of motion that settles again.',
+];
+
+/**
+ * Free fallback when the vision planner isn't available (mock mode, or the Gemini call failed):
+ * keyword-based prompts from the scene text, one flavour per take.
+ */
+export function keywordMotionPlan(scenePrompt: string, takes: number): MotionPlan {
+  const base = suggestMotionPrompt(scenePrompt);
+  return {
+    summary: 'Suggested from the scene description (the image itself wasn’t analysed).',
+    takes: Array.from({ length: takes }, (_, i) => `${base} ${TAKE_FLAVOURS[i % TAKE_FLAVOURS.length]}`),
+  };
+}
+
+export class KeywordMotionPlanner implements MotionPlanner {
+  readonly provider = 'local';
+  readonly model = 'keywords';
+  readonly costPerCallUsd = 0;
+
+  async plan(req: { scenePrompt: string; takes: number }): Promise<MotionPlan> {
+    return keywordMotionPlan(req.scenePrompt, req.takes);
+  }
 }
 
 function joinList(items: string[]): string {

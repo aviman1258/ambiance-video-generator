@@ -78,15 +78,18 @@
           <p id="image-error" class="error" hidden></p>
 
           <div id="animate-panel" class="inline-panel" hidden>
-            <label for="motion">Motion prompt</label>
-            <textarea id="motion" rows="5"></textarea>
+            <p id="motion-summary" class="plan-summary"></p>
+            <details id="motion-details">
+              <summary>See or edit the motion prompts</summary>
+              <div id="motion-takes"></div>
+              <button id="reset-motion" class="ghost">Reset to the plan</button>
+            </details>
             <div class="row">
-              <button id="reset-motion" class="ghost">Reset to suggestion</button>
               <span class="grow"></span>
               <button id="cancel-animate" class="ghost">Cancel</button>
-              <button id="start-animation" class="primary">Start animation</button>
+              <button id="start-animation" class="primary" disabled>Start animation</button>
             </div>
-            <p class="hint">8 seconds at 1080p. The image is both the first and last frame, so the clip loops. It takes a few minutes and shows up in the Animations tab.</p>
+            <p id="animate-hint" class="hint"></p>
             <p id="animate-error" class="error" hidden></p>
           </div>
           <p id="animate-status" class="notice" hidden></p>
@@ -122,8 +125,9 @@
             <a id="animation-image-link" class="button-link">View image</a>
             <a id="animation-file-link" class="button-link" target="_blank" rel="noopener" hidden>Open video file</a>
           </div>
-          <h3>Motion prompt</h3>
-          <p id="animation-motion" class="scene"></p>
+          <p id="animation-note" class="notice" hidden></p>
+          <h3>Motion prompts</h3>
+          <ol id="animation-takes" class="takes-list"></ol>
         </div>
       </div>
     </section>

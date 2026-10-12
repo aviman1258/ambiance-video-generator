@@ -232,3 +232,14 @@ button.primary:disabled .spinner { border-color: rgba(232, 162, 74, 0.25); borde
 .thumb-label .spinner { width: 12px; height: 12px; }
 .player-spinner { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7); }
 .notice .spinner { margin-right: 4px; }
+
+/* motion plan in the Animate panel, takes on the animation page */
+.plan-summary { margin: 0 0 6px; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.plan-summary .spinner { margin-right: 6px; }
+.plan-warning { color: var(--muted); font-size: 12.5px; }
+#motion-details summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin: 6px 0; }
+.take { display: block; margin: 10px 0 0; }
+.take textarea { margin-top: 4px; font-size: 13.5px; }
+.takes-list { margin: 6px 0 0; padding-left: 20px; color: var(--text); font-size: 13.5px; }
+.take-item { margin-bottom: 8px; overflow-wrap: anywhere; }
+.take-item.failed { color: var(--muted); text-decoration: line-through; }

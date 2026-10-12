@@ -1,0 +1,90 @@
+import { z } from 'zod';
+import { requestJson } from '../http.ts';
+import { type ImageData, type MotionPlan, type MotionPlanner, ProviderError } from '../types.ts';
+import { findOutputText } from './tagger.ts';
+
+const INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+
+function instructions(takes: number): string {
+  return `You direct subtle ambient animation for long, calm YouTube ambiance videos (study, sleep, relax).
+The attached illustration will be animated with Google Veo image-to-video. Each clip is 8 seconds,
+its FIRST and LAST frame are both exactly this image, and ${takes} different clips ("takes") will be
+played back to back on a loop for an hour. So:
+
+- Study the image closely. Name what is actually in it and could plausibly move on its own: water,
+  leaves, grass, palm fronds, cloth hanging on a line, smoke or steam, clouds, mist, rain, flames,
+  flickering lamps, light and shadow, reflections. Only animate things that are really there.
+- Name what must stay perfectly still: buildings, furniture, vehicles, tools, the ground, any people
+  or animals (they must not move, appear or leave).
+- The camera is locked off: no pan, tilt, zoom, dolly or parallax.
+- Motion is gentle, continuous and natural, calm enough to watch for an hour. Nothing enters or
+  leaves the frame. No new objects, no text, no sudden events, no flashes unless lightning is
+  clearly part of the scene.
+- The clip must be able to settle back to the exact starting image at the end.
+- Make the ${takes} takes genuinely different but consistent with each other, so the loop doesn't feel
+  repetitive: vary which elements lead, the strength and direction of the breeze, the drift of light
+  or clouds, the rhythm of ripples. Same scene, same mood, same time of day.
+
+Return JSON with:
+- "summary": one short sentence for the user, naming the main things that will move.
+- "takes": exactly ${takes} complete, self-contained Veo prompts (each 60-120 words), each starting
+  with the camera instruction and ending with what stays still.`;
+}
+
+const PlanJson = z.object({ summary: z.string().min(1), takes: z.array(z.string().min(20)).min(1) });
+
+/**
+ * Writes the motion prompts by looking at the image, with schema-constrained JSON via the
+ * Interactions endpoint (same call shape as the tagger).
+ */
+export class GeminiMotionPlanner implements MotionPlanner {
+  readonly provider = 'google';
+  readonly model: string;
+  readonly costPerCallUsd: number;
+  readonly apiKey: string;
+
+  constructor(opts: { apiKey: string; model: string; costPerCallUsd: number }) {
+    this.apiKey = opts.apiKey;
+    this.model = opts.model;
+    this.costPerCallUsd = opts.costPerCallUsd;
+  }
+
+  async plan(req: { image: ImageData; scenePrompt: string; takes: number }): Promise<MotionPlan> {
+    const json = await requestJson(INTERACTIONS_URL, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': this.apiKey },
+      body: {
+        model: this.model,
+        input: [
+          { type: 'text', text: `${instructions(req.takes)}\n\nThe image was generated from this description: ${req.scenePrompt}` },
+          { type: 'image', mime_type: req.image.mimeType, data: req.image.bytes.toString('base64') },
+        ],
+        response_format: {
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {
+            type: 'object',
+            properties: { summary: { type: 'string' }, takes: { type: 'array', items: { type: 'string' } } },
+            required: ['summary', 'takes'],
+          },
+        },
+      },
+      timeoutMs: 90_000,
+      retries: 1,
+    });
+    const text = findOutputText(json);
+    if (!text) throw new ProviderError(`No text in motion-planner response: ${JSON.stringify(json).slice(0, 400)}`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+    } catch {
+      throw new ProviderError(`Motion planner returned non-JSON: ${text.slice(0, 300)}`);
+    }
+    const plan = PlanJson.safeParse(parsed);
+    if (!plan.success) throw new ProviderError(`Motion planner returned unexpected JSON: ${text.slice(0, 300)}`);
+    const takes = plan.data.takes.map((t) => t.trim()).slice(0, req.takes);
+    // If the model returned fewer takes than asked, repeat its best ones rather than fail.
+    while (takes.length < req.takes) takes.push(takes[takes.length % plan.data.takes.length]!);
+    return { summary: plan.data.summary.trim(), takes };
+  }
+}

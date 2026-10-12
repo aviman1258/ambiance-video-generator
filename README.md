@@ -17,13 +17,16 @@ What's built so far is two services behind one web page with three tabs: **New s
      - generate another from the same prompt;
      - tap the image to open the full-resolution original.
 2. **Image animation.**
-   - On an image's page, **Animate** opens a panel right under the buttons with a suggested motion prompt you can edit.
+   - On an image's page, **Animate** opens a panel right under the buttons.
+   - A Gemini vision model (`MOTION_MODEL`) looks at the image and plans the motion: what can move (water, leaves, cloth, smoke, light), what must stay still, and a locked camera. It writes one prompt per take; you can read or edit them, but you don't need to. The plan is cached on the image. If Gemini fails, prompts come from the scene's words instead.
    - **Start animation** asks for confirmation first.
-   - Veo makes an 8 s, 1080p clip. The image is used as both the first and last frame, so the clip loops back to where it started.
+   - Veo makes `ANIMATION_TAKES` (default 3) clips of 8 s at 1080p. Each starts and ends on the image, so every join is seamless, and each has different motion so an hour of looping feels less repetitive.
+   - FFmpeg joins the takes into one ~24 s loop and drops Veo's own audio.
+   - If a take fails, the others still make a shorter loop, with a note saying so. Each take is charged only when it finishes.
    - Clips appear in the **Animations** tab with a spinner while they're being made. When one finishes, the page opens it on its own over the Animations tab, even if you've moved elsewhere in the app, and tapping a finished one opens a looping player where you can mark it ☆ Best or delete it (🗑).
    - Failed animations are left out of the Animations tab. The image's page says when its last animation failed, and why.
 
-Anything that costs money (Generate image, More like this, Generate another, Start animation) or deletes something asks for confirmation in a dialog. Buttons don't show prices; the header shows total spend against the cap.
+Anything that costs money (Generate image, More like this, Generate another, Start animation) or deletes something asks for confirmation in a dialog. Buttons don't show prices; the header shows what's been spent so far, plus anything still in progress.
 
 ## Setup
 
@@ -82,13 +85,17 @@ The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSIO
 | `VIDEO_MODEL` | `veo-3.1-fast-generate-preview` | Veo model |
 | `VIDEO_COST_PER_SECOND_USD` | `0.12` | Veo 3.1 Fast price per second (checked 2026-10-12); 8 s ≈ $0.96 |
 | `VIDEO_POLL_INTERVAL_MS` | `10000` | How often to check on a Veo job |
+| `ANIMATION_TAKES` | `3` | Veo takes per animation (1–4), each 8 s; 3 takes ≈ a 24 s loop at ≈ $2.88 |
+| `MOTION_MODEL` | `gemini-2.5-flash` | Vision model that plans the motion prompts ($0.30 / $2.50 per million tokens, checked 2026-10-12) |
+| `MOTION_COST_USD` | `0.002` | Estimated cost of one motion-planning call |
+| `FFMPEG_PATH` | bundled | FFmpeg used to join takes; defaults to the binary from the `ffmpeg-static` package |
 
 ## How it works
 
 - **Storage.** Image and video files are stored by content hash under `data/assets/`. SQLite (`data/ambiance.db`, via Node's built-in `node:sqlite`) holds:
   - images: prompt, model, size and tags;
   - generations: one row per Generate click, kept for provenance;
-  - animations: motion prompt, Veo operation id, status;
+  - animations and their takes: motion prompts, Veo operation ids, status, the joined loop;
   - a cost ledger.
 - **Prompts.** You type only the scene. The service adds:
   - the style (`src/modules/images/style.ts`);
@@ -128,10 +135,10 @@ The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSIO
 | GET | `/api/images?q=&limit=&offset=` | Images newest first, optionally filtered by tag search. Returns `{ items, total }`. |
 | GET | `/api/tags` | Most-used tags with counts |
 | GET / PATCH / DELETE | `/api/images/:id` | Read (with tags and prompts), update `{ notes?, tags? }`, or delete (with its animations) |
-| GET | `/api/images/:id/motion-suggestion` | Suggested Veo motion prompt for the image's scene |
+| GET | `/api/images/:id/motion-plan?refresh=1` | Gemini's motion plan for the image: `{ summary, takes[], source }` (cached; `refresh` plans again) |
 | GET | `/api/animations?imageId=` | Animations for one image (including failed ones), or all recent non-failed ones with their image's thumbnail and scene |
-| POST | `/api/animations` | `{ imageId, motionPrompt? }`. Starts an animation (202). |
-| GET / PATCH / DELETE | `/api/animations/:id` | Read, update `{ starred }` (Best), or delete |
+| POST | `/api/animations` | `{ imageId, motionPrompts? }`, one prompt per take; defaults to the cached plan. Starts an animation (202). |
+| GET / PATCH / DELETE | `/api/animations/:id` | Read (with each take's prompt and status), update `{ starred }` (Best), or delete |
 | GET | `/api/spend` | `{ spentUsd, inFlightUsd, capUsd }` |
 | GET | `/assets/<path>` | Generated files (supports range requests for video) |
 

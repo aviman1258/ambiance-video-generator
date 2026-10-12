@@ -23,9 +23,16 @@ export class CostGuard {
     return round(row.total);
   }
 
+  /** Takes still being made (each is charged when it finishes), plus older single-take animations. */
   inFlightUsd(): number {
     const row = this.db
-      .prepare("SELECT COALESCE(SUM(estimated_cost_usd), 0) AS total FROM animations WHERE status IN ('pending', 'running')")
+      .prepare(
+        `SELECT
+           COALESCE((SELECT SUM(estimated_cost_usd) FROM animation_clips WHERE status IN ('pending', 'running')), 0)
+         + COALESCE((SELECT SUM(a.estimated_cost_usd) FROM animations a
+                     WHERE a.status IN ('pending', 'running')
+                       AND NOT EXISTS (SELECT 1 FROM animation_clips c WHERE c.animation_id = a.id)), 0) AS total`,
+      )
       .get() as { total: number };
     return round(row.total);
   }

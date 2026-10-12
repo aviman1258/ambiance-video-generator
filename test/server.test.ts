@@ -28,7 +28,8 @@ test('config reports costs and the spend summary', async () => {
   const { app } = await setup();
   const body = (await app.inject('/api/config')).json();
   assert.equal(body.generationCostUsd, 0.051);
-  assert.equal(Number(body.animationCostUsd.toFixed(2)), 0.96);
+  assert.equal(body.animationCostUsd, 2.88, '3 takes x 8 s x $0.12');
+  assert.equal(body.animationTakes, 3);
   assert.deepEqual(body.spend, { spentUsd: 0, inFlightUsd: 0, capUsd: 10 });
   assert.equal(body.stylePresets[0].id, 'anime-painterly');
 });
@@ -70,8 +71,10 @@ test('animate an image over HTTP and stream the clip with range requests', async
   const gen = await generate(app, 'Darjeeling tea estate in mist');
   const img = gen.images[0];
 
-  const suggestion = (await app.inject(`/api/images/${img.id}/motion-suggestion`)).json();
-  assert.match(suggestion.motionPrompt, /mist drifting/);
+  const plan = (await app.inject(`/api/images/${img.id}/motion-plan`)).json();
+  assert.equal(plan.takes.length, 3);
+  assert.equal(plan.source, 'keywords', 'mock mode plans from the scene words');
+  assert.match(plan.takes[0], /mist drifting/);
 
   const anim = await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId: img.id } });
   assert.equal(anim.statusCode, 202);
@@ -97,14 +100,15 @@ test('failed animations are hidden from the Animations list; deleting works over
   const gen = await generate(app, 'Shimla cottage in the snow');
   const imageId = gen.images[0].id;
 
-  (services.videoGen as FakeVideoGenerator).script = [{ state: 'failed', error: 'Blocked by Veo safety filter' }];
-  const failed = (await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId, motionPrompt: 'snow' } })).json();
+  (services.videoGen as FakeVideoGenerator).failOps.set(1, 'Blocked by Veo safety filter');
+  const failed = (await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId, motionPrompts: ['snow'] } })).json();
   await services.animations.idle();
-  (services.videoGen as FakeVideoGenerator).script = [{ state: 'succeeded', videoRef: 'ok' }];
   const good = (await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId, motionPrompt: 'snow falling' } })).json();
   await services.animations.idle();
 
   assert.deepEqual((await app.inject('/api/animations')).json().map((a: { id: number }) => a.id), [good.id], 'failed one left out');
+  const detail = (await app.inject(`/api/animations/${good.id}`)).json();
+  assert.deepEqual(detail.takes.map((t: { status: string }) => t.status), ['succeeded'], 'older single-prompt clients still work');
   const forImage = (await app.inject(`/api/animations?imageId=${imageId}`)).json();
   assert.equal(forImage.length, 2, 'the image page still sees the failure');
 

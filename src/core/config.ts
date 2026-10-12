@@ -18,6 +18,9 @@ const EnvSchema = z
     VIDEO_MODEL: z.string().default('veo-3.1-fast-generate-preview'),
     VIDEO_COST_PER_SECOND_USD: z.coerce.number().nonnegative().default(0.12),
     VIDEO_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(10_000),
+    ANIMATION_TAKES: z.coerce.number().int().min(1).max(4).default(3),
+    MOTION_MODEL: z.string().default('gemini-2.5-flash'),
+    MOTION_COST_USD: z.coerce.number().nonnegative().default(0.002),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     APP_PASSWORD: z.string().min(12, 'APP_PASSWORD must be at least 12 characters').optional(),
     SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters').optional(),
@@ -56,6 +59,10 @@ export type Config = {
   videoModel: string;
   videoCostPerSecondUsd: number;
   videoPollIntervalMs: number;
+  /** Veo takes per animation, each 8 s, joined into one loop. */
+  animationTakes: number;
+  motionModel: string;
+  motionCostUsd: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   /** When set, the whole app sits behind a password login. */
   auth: { password: string; secret: string } | undefined;
@@ -88,6 +95,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     videoModel: e.VIDEO_MODEL,
     videoCostPerSecondUsd: e.VIDEO_COST_PER_SECOND_USD,
     videoPollIntervalMs: e.VIDEO_POLL_INTERVAL_MS,
+    animationTakes: e.ANIMATION_TAKES,
+    motionModel: e.MOTION_MODEL,
+    motionCostUsd: e.MOTION_COST_USD,
     logLevel: e.LOG_LEVEL,
     auth: e.APP_PASSWORD && e.SESSION_SECRET ? { password: e.APP_PASSWORD, secret: e.SESSION_SECRET } : undefined,
     trustProxy: e.TRUST_PROXY,

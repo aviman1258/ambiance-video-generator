@@ -88,7 +88,7 @@ test('deleting an image removes its tags, animations and files, but keeps files 
   const doomed = await generateOne(services, 'Kerala houseboat in the rain');
   const variation = services.images.createBatch({ referenceImageId: doomed.id });
   await variation.done;
-  const anim = services.animations.create({ imageId: doomed.id, motionPrompt: 'rain on water' });
+  const anim = services.animations.create({ imageId: doomed.id, motionPrompts: ['rain on water'] });
   await services.animations.idle();
   const clip = services.animations.get(anim.id).file_path!;
   const doomedDetail = services.images.getImageDetail(doomed.id);
@@ -111,7 +111,7 @@ test('deleting an image removes its tags, animations and files, but keeps files 
 test('an image that is still being animated cannot be deleted', async () => {
   const services = makeServices();
   const image = await generateOne(services, 'Goa beach shack at sunset');
-  services.animations.create({ imageId: image.id, motionPrompt: 'waves' });
+  services.animations.create({ imageId: image.id, motionPrompts: ['waves'] });
   await assert.rejects(services.images.deleteImage(image.id), /still being animated/);
   await services.animations.idle();
   await services.images.deleteImage(image.id);

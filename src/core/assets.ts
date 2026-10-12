@@ -46,7 +46,8 @@ export function assetInUse(db: Db, relPath: string): boolean {
   const row = db
     .prepare(
       `SELECT EXISTS (SELECT 1 FROM images WHERE file_path = ?1 OR thumb_path = ?1 OR preview_path = ?1)
-           OR EXISTS (SELECT 1 FROM animations WHERE file_path = ?1) AS used`,
+           OR EXISTS (SELECT 1 FROM animations WHERE file_path = ?1)
+           OR EXISTS (SELECT 1 FROM animation_clips WHERE file_path = ?1) AS used`,
     )
     .get(relPath) as { used: number };
   return row.used === 1;

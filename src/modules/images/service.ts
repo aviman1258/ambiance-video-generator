@@ -360,11 +360,18 @@ export class ImageService {
       .get(id) as { n: number };
     if (busy.n > 0) throw new ConflictError('This image is still being animated. Delete it once the animation finishes.');
 
-    const clips = (this.db.prepare('SELECT file_path FROM animations WHERE image_id = ?').all(id) as { file_path: string | null }[]).map(
-      (r) => r.file_path,
-    );
+    const clips = (
+      this.db
+        .prepare(
+          `SELECT file_path FROM animations WHERE image_id = ?1
+           UNION ALL
+           SELECT c.file_path FROM animation_clips c JOIN animations a ON a.id = c.animation_id WHERE a.image_id = ?1`,
+        )
+        .all(id) as { file_path: string | null }[]
+    ).map((r) => r.file_path);
     this.db.exec('BEGIN');
     try {
+      this.db.prepare('DELETE FROM animation_clips WHERE animation_id IN (SELECT id FROM animations WHERE image_id = ?)').run(id);
       this.db.prepare('DELETE FROM animations WHERE image_id = ?').run(id);
       this.db.prepare('DELETE FROM image_tags WHERE image_id = ?').run(id);
       // "More like this" generations keep their own images; they just lose the link to this one.
