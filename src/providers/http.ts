@@ -37,8 +37,13 @@ async function request(
       });
       if (res.ok) return res;
       const body = (await res.text()).slice(0, 800);
-      const retryable = res.status === 429 || res.status >= 500;
-      throw new ProviderError(`HTTP ${res.status} from ${redact(url)}: ${body}`, { retryable, status: res.status });
+      // A 429 for "limit: 0" (free-tier key on a paid model) will never succeed, so don't retry it.
+      const hardLimit = res.status === 429 && /limit: 0\b/.test(body);
+      const retryable = (res.status === 429 && !hardLimit) || res.status >= 500;
+      const hint = /free tier/i.test(body)
+        ? ' (Your Gemini API key is on the free tier, which can\'t use this model. Turn on billing for the key in Google AI Studio.)'
+        : '';
+      throw new ProviderError(`HTTP ${res.status} from ${redact(url)}: ${body}${hint}`, { retryable, status: res.status });
     } catch (err) {
       const providerErr =
         err instanceof ProviderError

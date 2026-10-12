@@ -83,7 +83,8 @@ async function loadConfig() {
   state.config = await api('/api/config');
   const c = state.config;
   const badge = $('#provider');
-  badge.textContent = c.provider === 'mock' ? 'MOCK · free' : `${c.imageModel} · ${c.videoModel}`;
+  badge.textContent = c.provider === 'mock' ? 'MOCK · free' : 'LIVE · paid';
+  badge.title = `${c.imageModel} · ${c.videoModel}`;
   badge.classList.toggle('paid', c.provider !== 'mock');
   $('#logout').hidden = !c.authEnabled;
   $('#style').replaceChildren(...c.stylePresets.map((p) => h('option', { value: p.id }, p.label)));

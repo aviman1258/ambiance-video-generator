@@ -23,6 +23,26 @@ test('findLastImageBlock handles the documented content-block shape and older in
   assert.equal(findLastImageBlock({ steps: [{ content: [{ type: 'text', text: 'refused' }] }] }), undefined);
 });
 
+test('a free-tier "limit: 0" 429 is not retried and explains how to fix it', async () => {
+  const { requestJson } = await import('../src/providers/http.ts');
+  let calls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response('{"error":{"message":"Rate limit exceeded (limit: 0 requests per day on Free Tier)"}}', { status: 429 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(requestJson('https://example.test/x', { method: 'POST', body: {} }), (err: Error & { retryable?: boolean }) => {
+      assert.equal(err.retryable, false);
+      assert.match(err.message, /Turn on billing/);
+      return true;
+    });
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('imageInfo reads PNG dimensions', () => {
   assert.deepEqual(imageInfo(encodePng(1920, 1080, () => [0, 0, 0])), { mimeType: 'image/png', width: 1920, height: 1080 });
   assert.equal(imageInfo(Buffer.from('nope')).mimeType, 'application/octet-stream');
