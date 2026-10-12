@@ -73,7 +73,7 @@ test('Veo start sends both frames as bytesBase64Encoded inside instances[0] (not
     assert.deepEqual(instance.image, expected);
     assert.deepEqual(instance.lastFrame, expected);
     assert.equal(JSON.stringify(sent!.body).includes('inlineData'), false);
-    assert.deepEqual(sent!.body.parameters, { aspectRatio: '16:9', resolution: '1080p', durationSeconds: '8', personGeneration: 'allow_adult' });
+    assert.deepEqual(sent!.body.parameters, { aspectRatio: '16:9', resolution: '1080p', durationSeconds: 8, personGeneration: 'allow_adult' });
   } finally {
     globalThis.fetch = realFetch;
   }

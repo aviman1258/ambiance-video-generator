@@ -69,8 +69,9 @@ export class VeoVideoGenerator implements VideoGenerator {
         parameters: {
           aspectRatio: '16:9',
           resolution: req.resolution,
-          // The docs list durations as strings; proto JSON accepts a string for either type.
-          durationSeconds: String(req.durationSeconds),
+          // A number. The docs' table lists "8" as a string, but the API rejects that:
+          // "The value type for `durationSeconds` needs to be a number" (2026-10-12).
+          durationSeconds: req.durationSeconds,
           personGeneration: 'allow_adult',
         },
       },

@@ -7,7 +7,7 @@ What's built so far is two services behind one web page with three tabs: **New s
 1. **Image generation.**
    - Describe a scene, pick a style and tap Generate. You get one image in a hand-painted anime style.
    - Generate stays gray until the text reads like a scene. A shared check (`web/scene-check.js`) catches empty boxes, keyboard mashing and symbol soup; the server applies the same check.
-   - When it's ready, the page opens it from the Images tab.
+   - While it's being made, a spinner tile shows in the Images tab. When it's ready, the page opens it.
    - Each image is tagged automatically: a cheap Gemini vision model looks at it. You can add and remove tags.
    - **Images** is a thumbnail grid you can search by tag. Tap a thumbnail to open the image's page.
    - On that page you can:
@@ -20,7 +20,7 @@ What's built so far is two services behind one web page with three tabs: **New s
    - On an image's page, **Animate** opens a panel right under the buttons with a suggested motion prompt you can edit.
    - **Start animation** asks for confirmation first.
    - Veo makes an 8 s, 1080p clip. The image is used as both the first and last frame, so the clip loops back to where it started.
-   - Clips appear in the **Animations** tab. Each shows "Animating…" until it's done, and tapping a finished one opens a looping player where you can mark it ☆ Best or delete it (🗑).
+   - Clips appear in the **Animations** tab with a spinner while they're being made. When one finishes, the page opens it on its own over the Animations tab, even if you've moved elsewhere in the app, and tapping a finished one opens a looping player where you can mark it ☆ Best or delete it (🗑).
    - Failed animations are left out of the Animations tab. The image's page says when its last animation failed, and why.
 
 Anything that costs money (Generate image, More like this, Generate another, Start animation) or deletes something asks for confirmation in a dialog. Buttons don't show prices; the header shows total spend against the cap.

@@ -64,6 +64,15 @@ function showError(el, err) {
   el.hidden = !err;
 }
 
+const spinner = (big = false) => h('span', { class: big ? 'spinner big' : 'spinner', role: 'status', 'aria-label': 'Working' });
+
+/** Disables a button and shows a spinner in it while work is in flight. */
+function setBusy(button, busy) {
+  button.classList.toggle('busy', busy);
+  button.querySelector(':scope > .spinner')?.remove();
+  if (busy) button.prepend(spinner());
+}
+
 /** Runs the action with the button disabled, so a double tap can't fire it twice. */
 function onTap(button, action) {
   button.addEventListener('click', async () => {
@@ -73,6 +82,7 @@ function onTap(button, action) {
       await action();
     } finally {
       button.disabled = false;
+      setBusy(button, false);
     }
   });
 }
@@ -282,7 +292,7 @@ function renderLibrary() {
             { class: 'thumb pending', title: p.scene },
             p.error
               ? h('div', { class: 'thumb-error' }, h('strong', {}, 'Failed'), h('span', {}, p.error), h('button', { onclick: () => { state.pending = state.pending.filter((x) => x !== p); renderLibrary(); } }, 'Dismiss'))
-              : h('div', { class: 'skeleton' }, h('span', {}, 'Generating…')),
+              : h('div', { class: 'skeleton' }, spinner(true), h('span', {}, 'Generating…')),
           ),
         )
       : [];
@@ -368,11 +378,46 @@ function renderAnimations() {
         'a',
         { class: `thumb anim ${a.status}`, href: `#/animation/${a.id}`, title: a.motion_prompt },
         h('img', { src: a.imageThumbUrl, loading: 'lazy', alt: a.scene_prompt }),
-        isRunning(a) ? h('span', { class: 'thumb-label' }, 'Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
+        isRunning(a) ? h('span', { class: 'thumb-label' }, spinner(), ' Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
         h('span', { class: 'thumb-badges' }, a.starred && h('span', { class: 'tb star-badge' }, '★ Best')),
       ),
     ),
   );
+}
+
+// ---------- finished animations open themselves ----------
+
+const watching = new Set();
+
+/** Checks an in-progress animation every few seconds; when it's done, opens it over the Animations tab. */
+async function watchAnimation(id) {
+  if (watching.has(id)) return;
+  watching.add(id);
+  while (true) {
+    await sleep(5000);
+    let a;
+    try {
+      a = await api(`/api/animations/${id}`);
+    } catch {
+      continue; // network blip; keep checking
+    }
+    if (isRunning(a)) continue;
+    watching.delete(id);
+    refreshCounts();
+    refreshSpend();
+    if (a.status === 'succeeded') await openFinishedAnimation(id);
+    else if (state.image?.id === a.image_id && !$('#image-view').hidden) refreshAnimateStatus(); // shows why it failed
+    return;
+  }
+}
+
+async function openFinishedAnimation(id) {
+  while ($('#confirm-dialog').open) await sleep(500); // don't yank the page out from under a question
+  if (location.hash === `#/animation/${id}`) return openAnimation(id);
+  // Put the Animations tab underneath (and in history, so Back lands there), then open the clip.
+  showHome('animations', { scrollTop: true });
+  history.pushState(null, '', '#/animations');
+  location.hash = `#/animation/${id}`;
 }
 
 // ---------- one animation ----------
@@ -411,7 +456,9 @@ function renderAnimation() {
         'div',
         { class: 'player-wait' },
         h('img', { src: a.imagePreviewUrl, alt: '' }),
-        h('span', { class: a.status === 'failed' ? 'thumb-label bad' : 'thumb-label' }, a.status === 'failed' ? 'Failed' : 'Animating… usually a few minutes'),
+        a.status === 'failed'
+          ? h('span', { class: 'thumb-label bad' }, 'Failed')
+          : h('span', { class: 'player-spinner' }, spinner(true), h('span', {}, 'Animating… usually a few minutes')),
       ),
     );
   }
@@ -505,12 +552,13 @@ async function refreshAnimateStatus() {
   status.hidden = !running && !done && !failed;
   status.classList.toggle('bad', failed && !running);
   status.replaceChildren(
+    running ? spinner() : '',
     running
-      ? `Animating… it'll show up in the Animations tab in a few minutes. `
+      ? ` Animating… this takes a few minutes. It opens in the Animations tab when it's done. `
       : failed
         ? `The last animation failed: ${latest.error ?? 'unknown error'} `
         : `${plural(done, 'animation')} of this image. `,
-    (running || done) && h('a', { href: '#/animations' }, 'Open Animations'),
+    running > 0 || done > 0 ? h('a', { href: '#/animations' }, 'Open Animations') : '', // not `running || done`: 0 would render as "0"
   );
 }
 
@@ -607,16 +655,20 @@ async function init() {
     if ($('#generate').disabled) return;
     $('#generate').disabled = true;
     if (await askConfirm({ title: 'Generate this image?', body: PAID, confirmLabel: 'Generate' })) {
+      setBusy($('#generate'), true);
       await generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error'));
     }
+    setBusy($('#generate'), false);
     updateGenerateButton(); // back to grey if the box no longer holds a usable scene
   });
   onTap($('#more-like-this'), async () => {
     if (!(await askConfirm({ title: 'Make a variation of this image?', body: `A new image in the same spirit. ${PAID}`, confirmLabel: 'Generate' }))) return;
+    setBusy($('#more-like-this'), true);
     await generate({ referenceImageId: state.image.id }, $('#image-error'));
   });
   onTap($('#generate-another'), async () => {
     if (!(await askConfirm({ title: 'Generate another from this prompt?', body: PAID, confirmLabel: 'Generate' }))) return;
+    setBusy($('#generate-another'), true);
     await generate({ scenePrompt: state.image.scene_prompt, stylePreset: state.image.style_preset, parentBatchId: state.image.batch_id }, $('#image-error'));
   });
   onTap($('#start-animation'), async () => {
@@ -626,13 +678,16 @@ async function init() {
       confirmLabel: 'Start animation',
     });
     if (!yes) return;
+    setBusy($('#start-animation'), true);
     showError($('#animate-error'), null);
+    let started;
     try {
-      await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
+      started = await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
     } catch (e) {
       showError($('#animate-error'), e);
       return;
     }
+    watchAnimation(started.id);
     $('#animate-panel').hidden = true;
     refreshAnimateStatus();
     refreshCounts();
@@ -642,6 +697,7 @@ async function init() {
   updateGenerateButton();
   refreshCounts();
   route();
+  for (const a of await api('/api/animations')) if (isRunning(a)) watchAnimation(a.id);
 }
 
 init().catch((e) => {
