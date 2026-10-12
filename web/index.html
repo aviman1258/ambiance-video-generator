@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ambiance Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23e8a24a'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Ambiance Studio</h1>
+    <span id="provider" class="badge"></span>
+    <span id="spend" class="spend" title="Recorded spend / in flight / cap"></span>
+  </header>
+
+  <main>
+    <section class="panel" id="compose">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="new" role="tab">New scene</button>
+        <button class="tab" data-tab="saved" role="tab">Saved images <span id="saved-count"></span></button>
+      </div>
+
+      <div class="tab-body" data-body="new">
+        <label for="scene">Describe the scene</label>
+        <textarea id="scene" rows="3" placeholder="Monsoon evening in a small Mumbai apartment, desk by a tall window, rain streaming down the glass, blurred yellow-black taxis below, warm lamp, a steaming cup of chai"></textarea>
+        <div class="row">
+          <label for="style" class="inline">Style</label>
+          <select id="style"></select>
+          <span class="grow"></span>
+          <button id="generate" class="primary">Generate</button>
+        </div>
+        <p class="hint">Style and channel rules (no text, no people, respectful Indian setting) are added for you. The full prompt is shown with each batch.</p>
+      </div>
+
+      <div class="tab-body" data-body="saved" hidden>
+        <p class="hint" id="saved-empty">No saved images yet. Star one in a batch to keep it here.</p>
+        <div id="saved-grid" class="grid small"></div>
+      </div>
+      <p id="compose-error" class="error" hidden></p>
+    </section>
+
+    <section class="panel" id="batch" hidden>
+      <div class="row">
+        <h2 id="batch-title"></h2>
+        <span id="batch-status" class="pill"></span>
+        <span class="grow"></span>
+        <button id="regenerate">Regenerate (same prompt)</button>
+        <button id="edit-prompt">Edit prompt</button>
+      </div>
+      <p id="batch-scene" class="scene"></p>
+      <details><summary>Full prompt sent to the model</summary><pre id="batch-prompt"></pre></details>
+      <p id="batch-error" class="error" hidden></p>
+      <div id="batch-grid" class="grid"></div>
+    </section>
+
+    <section class="panel" id="animate" hidden>
+      <div class="row">
+        <h2>Animate</h2>
+        <span class="grow"></span>
+        <button id="close-animate" class="ghost">Close</button>
+      </div>
+      <div class="animate-layout">
+        <img id="animate-image" alt="Image to animate" />
+        <div class="animate-controls">
+          <label for="motion">Motion prompt</label>
+          <textarea id="motion" rows="6"></textarea>
+          <div class="row">
+            <button id="reset-motion" class="ghost">Reset to suggestion</button>
+            <span class="grow"></span>
+            <button id="start-animation" class="primary">Animate</button>
+          </div>
+          <p class="hint">8 s at 1080p. The image is used as both the first and last frame, so the clip loops back to where it started.</p>
+          <p id="animate-error" class="error" hidden></p>
+        </div>
+      </div>
+      <h3>Takes</h3>
+      <p class="hint" id="takes-empty">No animations for this image yet.</p>
+      <div id="takes" class="grid"></div>
+    </section>
+
+    <section class="panel" id="history">
+      <h2>Recent batches</h2>
+      <div id="history-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

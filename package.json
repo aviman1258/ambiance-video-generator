@@ -1,0 +1,25 @@
+{
+  "name": "ambiance-video-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal pipeline for illustrated Indian ambiance videos: image generation and Veo animation services.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --use-system-ca --env-file-if-exists=.env src/main.ts",
+    "dev": "node --watch --use-system-ca --env-file-if-exists=.env src/main.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.6",
+    "fastify": "^5.12.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
