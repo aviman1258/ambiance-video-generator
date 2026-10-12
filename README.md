@@ -2,10 +2,11 @@
 
 Personal pipeline for long, illustrated **Indian ambiance** videos for YouTube. The plan, research and phased roadmap are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-What's built so far is two services behind one web page with three tabs: **New scene**, **Saved** and **All images**.
+What's built so far is two services behind one web page with four tabs: **New scene**, **Saved**, **All images** and **Animations**.
 
 1. **Image generation.**
    - Describe a scene, pick a style and tap Generate. You get one image in a hand-painted anime style.
+   - Generate stays gray until the text reads like a scene. A shared check (`web/scene-check.js`) catches empty boxes, keyboard mashing and symbol soup; the server applies the same check.
    - When it's ready, the page opens it from the All images tab.
    - Each image is tagged automatically: a cheap Gemini vision model looks at it. You can add and remove tags.
    - **Saved** and **All images** are thumbnail grids you can search by tag. Tap a thumbnail to open the image's page.
@@ -15,7 +16,13 @@ What's built so far is two services behind one web page with three tabs: **New s
      - make "more like this" (uses the image as a reference);
      - generate another from the same prompt;
      - tap the image to open the full-resolution original.
-2. **Image animation.** On an image's page, turn it into an 8 s, 1080p Veo clip. The image is used as both the first and last frame, so the clip loops back to where it started. One image can have several takes; star the best.
+2. **Image animation.**
+   - On an image's page, **Animate** opens a panel right under the buttons with a suggested motion prompt you can edit.
+   - **Start animation** needs a second tap to confirm, since it's the expensive call.
+   - Veo makes an 8 s, 1080p clip. The image is used as both the first and last frame, so the clip loops back to where it started.
+   - Clips appear in the **Animations** tab. Each shows "Animating…" until it's done, and tapping a finished one opens a looping player where you can mark it ☆ Best.
+
+Buttons don't show prices. The header shows total spend against the cap.
 
 ## Setup
 
@@ -93,7 +100,7 @@ The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSIO
   - Search needs every term to match the start of a word in some tag, so `rain kol` finds an image tagged "monsoon rain" and "kolkata".
 - **Thumbnails.** Each image also gets two WebP copies, made with sharp: a 480 px thumbnail for the grids and a 1600 px preview for its page. The original is untouched.
 - **Startup.** Images that predate thumbnails or tags get them on startup. That uses prompt keywords, never a paid call.
-- **Spending money.** Paid buttons show the estimated cost and need a second click to confirm. The server refuses anything that would go over `SPEND_CAP_USD`.
+- **Spending money.** Image actions run on one tap; Start animation needs a confirming second tap. The server refuses anything that would go over `SPEND_CAP_USD`.
 - **Resuming.**
   - Veo jobs are tracked by operation id. If the server restarts mid-job, it resumes polling instead of submitting (and paying) again.
   - Clicking Animate twice for the same image and prompt reuses the in-flight job.
@@ -114,7 +121,7 @@ The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSIO
 | GET | `/api/tags` | Most-used tags with counts |
 | GET / PATCH | `/api/images/:id` | Read (with tags and prompts), or update `{ saved?, notes?, tags? }` |
 | GET | `/api/images/:id/motion-suggestion` | Suggested Veo motion prompt for the image's scene |
-| GET | `/api/animations?imageId=` | Takes for one image (or recent takes) |
+| GET | `/api/animations?imageId=` | Animations for one image, or all recent ones with their image's thumbnail and scene |
 | POST | `/api/animations` | `{ imageId, motionPrompt? }`. Starts an animation (202). |
 | GET / PATCH | `/api/animations/:id` | Read, or update `{ starred }` |
 | GET | `/api/spend` | `{ spentUsd, inFlightUsd, capUsd }` |

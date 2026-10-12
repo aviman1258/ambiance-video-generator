@@ -17,22 +17,24 @@
   </header>
 
   <main>
-    <!-- Home: three tabs -->
+    <!-- Home: tabs -->
     <section id="home-view">
       <nav class="tabs" role="tablist">
         <a class="tab" data-tab="new" href="#/new" role="tab">New scene</a>
         <a class="tab" data-tab="saved" href="#/saved" role="tab">Saved <span id="saved-count" class="count"></span></a>
         <a class="tab" data-tab="all" href="#/all" role="tab">All images <span id="all-count" class="count"></span></a>
+        <a class="tab" data-tab="animations" href="#/animations" role="tab">Animations <span id="animations-count" class="count"></span></a>
       </nav>
 
       <div class="panel" id="new-tab">
         <label for="scene">Describe the scene</label>
         <textarea id="scene" rows="4" placeholder="Monsoon evening in a small Mumbai apartment, desk by a tall window, rain streaming down the glass, blurred yellow-black taxis below, warm lamp, a steaming cup of chai"></textarea>
+        <p id="scene-hint" class="hint" hidden></p>
         <div class="row">
           <label for="style" class="inline">Style</label>
           <select id="style"></select>
           <span class="grow"></span>
-          <button id="generate" class="primary">Generate</button>
+          <button id="generate" class="primary" disabled>Generate image</button>
         </div>
         <p class="hint">Style and channel rules (no text, no people, respectful Indian setting) are added for you. Tags are added automatically and can be edited.</p>
         <p id="generate-error" class="error" hidden></p>
@@ -48,57 +50,82 @@
         <p id="library-empty" class="hint" hidden></p>
         <div class="row center"><button id="load-more" hidden>Load more</button></div>
       </div>
+
+      <div class="panel" id="animations-tab" hidden>
+        <p id="animations-summary" class="hint"></p>
+        <div id="animations-grid" class="thumb-grid"></div>
+        <p id="animations-empty" class="hint" hidden>No animations yet. Open an image and tap Animate.</p>
+      </div>
     </section>
 
     <!-- One image: a full-screen layer over the grid, so closing it returns to the same scroll spot -->
     <section id="image-view" class="overlay" hidden role="dialog" aria-label="Image">
-     <div class="overlay-bar">
-        <button id="back" class="ghost">← Back</button>
+      <div class="overlay-bar">
+        <button class="ghost back">← Back</button>
         <span class="grow"></span>
         <button id="save-toggle" class="star"></button>
-     </div>
-     <div class="overlay-inner">
-
-      <div class="panel image-panel">
-        <a id="full-link" target="_blank" rel="noopener" title="Open full resolution"><img id="image-preview" alt="" /></a>
-        <p id="image-meta" class="hint"></p>
-
-        <div class="row">
-          <button id="more-like-this">More like this</button>
-          <button id="generate-another">Generate another</button>
-          <span class="grow"></span>
-          <button id="jump-animate">Animate ↓</button>
-        </div>
-        <p id="image-error" class="error" hidden></p>
-
-        <h3>Tags</h3>
-        <div id="image-tags" class="chips"></div>
-        <form id="tag-form" class="row">
-          <input id="tag-input" placeholder="Add a tag" autocomplete="off" maxlength="32" />
-          <button type="submit">Add</button>
-        </form>
-
-        <h3>Scene</h3>
-        <p id="image-scene" class="scene"></p>
-        <details><summary>Full prompt sent to the model</summary><pre id="image-prompt"></pre></details>
       </div>
+      <div class="overlay-inner">
+        <div class="panel image-panel">
+          <a id="full-link" target="_blank" rel="noopener" title="Open full resolution"><img id="image-preview" alt="" /></a>
+          <p id="image-meta" class="hint"></p>
 
-      <div class="panel" id="animate-section">
-        <h2>Animate</h2>
-        <label for="motion">Motion prompt</label>
-        <textarea id="motion" rows="5"></textarea>
-        <div class="row">
-          <button id="reset-motion" class="ghost">Reset to suggestion</button>
-          <span class="grow"></span>
-          <button id="start-animation" class="primary">Animate</button>
+          <div class="row">
+            <button id="more-like-this">More like this</button>
+            <button id="generate-another">Generate another</button>
+            <span class="grow"></span>
+            <button id="toggle-animate" class="primary">Animate</button>
+          </div>
+          <p id="image-error" class="error" hidden></p>
+
+          <div id="animate-panel" class="inline-panel" hidden>
+            <label for="motion">Motion prompt</label>
+            <textarea id="motion" rows="5"></textarea>
+            <div class="row">
+              <button id="reset-motion" class="ghost">Reset to suggestion</button>
+              <span class="grow"></span>
+              <button id="cancel-animate" class="ghost">Cancel</button>
+              <button id="start-animation" class="primary">Start animation</button>
+            </div>
+            <p class="hint">8 seconds at 1080p. The image is both the first and last frame, so the clip loops. It takes a few minutes and shows up in the Animations tab.</p>
+            <p id="animate-error" class="error" hidden></p>
+          </div>
+          <p id="animate-status" class="notice" hidden></p>
+
+          <h3>Tags</h3>
+          <div id="image-tags" class="chips"></div>
+          <form id="tag-form" class="row">
+            <input id="tag-input" placeholder="Add a tag" autocomplete="off" maxlength="32" />
+            <button type="submit">Add</button>
+          </form>
+
+          <h3>Scene</h3>
+          <p id="image-scene" class="scene"></p>
+          <details><summary>Full prompt sent to the model</summary><pre id="image-prompt"></pre></details>
         </div>
-        <p class="hint">8 s at 1080p. The image is both the first and last frame, so the clip loops back to where it started.</p>
-        <p id="animate-error" class="error" hidden></p>
-        <h3>Takes</h3>
-        <p class="hint" id="takes-empty">No animations for this image yet.</p>
-        <div id="takes" class="grid"></div>
       </div>
-     </div>
+    </section>
+
+    <!-- One animation -->
+    <section id="animation-view" class="overlay" hidden role="dialog" aria-label="Animation">
+      <div class="overlay-bar">
+        <button class="ghost back">← Back</button>
+        <span class="grow"></span>
+        <button id="best-toggle" class="star" hidden></button>
+      </div>
+      <div class="overlay-inner">
+        <div class="panel image-panel">
+          <div id="animation-media"></div>
+          <p id="animation-meta" class="hint"></p>
+          <p id="animation-error" class="error" hidden></p>
+          <div class="row">
+            <a id="animation-image-link" class="button-link">View image</a>
+            <a id="animation-file-link" class="button-link" target="_blank" rel="noopener" hidden>Open video file</a>
+          </div>
+          <h3>Motion prompt</h3>
+          <p id="animation-motion" class="scene"></p>
+        </div>
+      </div>
     </section>
   </main>
 

@@ -57,11 +57,11 @@ test('search matches the start of any word in a tag, and every term must match',
   const tagger = new FakeTagger();
   const services = makeServices({ tagger });
   tagger.tags = ['kolkata', 'monsoon rain', 'night'];
-  const a = await generateOne(services, 'a');
+  const a = await generateOne(services, 'Kolkata alley at night');
   tagger.tags = ['mumbai', 'rain', 'evening'];
-  const b = await generateOne(services, 'b');
+  const b = await generateOne(services, 'Mumbai evening rain');
   tagger.tags = ['shimla', 'snow'];
-  await generateOne(services, 'c');
+  await generateOne(services, 'Shimla cottage in snow');
 
   const ids = (q: string) => services.images.listImages({ q }).items.map((i) => i.id);
   assert.deepEqual(ids('rain'), [b.id, a.id], 'newest first; "rain" matches "monsoon rain"');
@@ -115,7 +115,7 @@ test('failures and validation errors', async () => {
   const services = makeServices({ imageGen: gen });
   assert.throws(() => services.images.createBatch({ scenePrompt: '   ' }), BadRequestError);
   assert.throws(() => services.images.createBatch({ referenceImageId: 999 }), NotFoundError);
-  const { batch, done } = services.images.createBatch({ scenePrompt: 'Darjeeling' });
+  const { batch, done } = services.images.createBatch({ scenePrompt: 'Darjeeling tea garden' });
   await done;
   const result = services.images.getBatch(batch.id);
   assert.equal(result.status, 'failed');

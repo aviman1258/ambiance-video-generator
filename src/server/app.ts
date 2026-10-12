@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { AssetStore } from '../core/assets.ts';
 import type { Config } from '../core/config.ts';
 import type { CostGuard } from '../core/cost.ts';
-import type { AnimationRow, AnimationService } from '../modules/animation/service.ts';
+import type { AnimationRow, AnimationService, AnimationWithImage } from '../modules/animation/service.ts';
 import type { ImageRow, ImageService } from '../modules/images/service.ts';
 import { STYLE_PRESETS } from '../modules/images/style.ts';
 import { registerAuth } from './auth.ts';
@@ -75,7 +75,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     thumbUrl: `/assets/${img.thumb_path ?? img.file_path}`,
     previewUrl: `/assets/${img.preview_path ?? img.file_path}`,
   });
-  const animationView = (a: AnimationRow) => ({ ...a, starred: !!a.starred, url: a.file_path ? `/assets/${a.file_path}` : null });
+  const animationView = (a: AnimationRow & Partial<AnimationWithImage>) => ({
+    ...a,
+    starred: !!a.starred,
+    url: a.file_path ? `/assets/${a.file_path}` : null,
+    ...(a.image_file_path
+      ? {
+          imageThumbUrl: `/assets/${a.image_thumb_path ?? a.image_file_path}`,
+          imagePreviewUrl: `/assets/${a.image_preview_path ?? a.image_file_path}`,
+        }
+      : {}),
+  });
 
   app.get('/api/config', async () => ({
     provider: config.providers,
@@ -138,12 +148,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   app.get('/api/animations/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
-    return animationView(animations.get(id));
+    return animationView(animations.getWithImage(id));
   });
 
   app.patch('/api/animations/:id', async (req) => {
     const { id } = IdParams.parse(req.params);
-    return animationView(animations.setStarred(id, PatchAnimationBody.parse(req.body ?? {}).starred));
+    animations.setStarred(id, PatchAnimationBody.parse(req.body ?? {}).starred);
+    return animationView(animations.getWithImage(id));
   });
 
   app.get('/api/spend', async () => cost.summary());

@@ -80,6 +80,12 @@ test('animate an image over HTTP and stream the clip with range requests', async
   const done = (await app.inject(`/api/animations/${anim.json().id}`)).json();
   assert.equal(done.status, 'succeeded');
   assert.equal((await app.inject('/api/images')).json().items[0].animation_count, 1);
+  assert.match(done.imageThumbUrl, /\.webp$/, 'animation carries its image thumbnail for the Animations tab');
+  const list = (await app.inject('/api/animations')).json();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].scene_prompt, 'Darjeeling tea estate in mist');
+  assert.match(list[0].imageThumbUrl, /\.webp$/);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/generations', payload: { scenePrompt: 'asdf qwer' } })).statusCode, 400);
 
   const clip = await app.inject({ url: done.url, headers: { range: 'bytes=0-3' } });
   assert.equal(clip.statusCode, 206, 'range requests work so <video> can loop and seek');

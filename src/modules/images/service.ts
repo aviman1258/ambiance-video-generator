@@ -8,6 +8,7 @@ import type { ImageData, ImageGenerator, ImageTagger } from '../../providers/typ
 import { makeRenditions } from './renditions.ts';
 import { buildImagePrompt, buildVariationPrompt, DEFAULT_STYLE_PRESET, STYLE_PRESETS } from './style.ts';
 import { keywordTags, normalizeTags } from './tags.ts';
+import { sceneProblem } from '../../../web/scene-check.js';
 
 export type BatchStatus = 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted';
 
@@ -119,6 +120,9 @@ export class ImageService {
     }
     if (!scenePrompt) throw new BadRequestError('Describe the scene first');
     if (scenePrompt.length > 2000) throw new BadRequestError('Scene prompt is too long (2000 characters max)');
+    // Typed prompts only; a "more like this" reuses an existing image's prompt as-is.
+    const problem = reference ? null : sceneProblem(scenePrompt);
+    if (problem) throw new BadRequestError(problem);
 
     const count = this.imagesPerBatch;
     this.cost.assertCanSpend(this.generationCostUsd(), count === 1 ? 'An image' : `${count} images`);

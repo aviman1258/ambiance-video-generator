@@ -27,6 +27,18 @@ export type AnimationRow = {
   updated_at: string;
 };
 
+export type AnimationWithImage = AnimationRow & {
+  image_thumb_path: string | null;
+  image_preview_path: string | null;
+  image_file_path: string;
+  scene_prompt: string;
+};
+
+const WITH_IMAGE_SQL = `
+  SELECT a.*, i.thumb_path AS image_thumb_path, i.preview_path AS image_preview_path,
+         i.file_path AS image_file_path, b.scene_prompt
+  FROM animations a JOIN images i ON i.id = a.image_id JOIN image_batches b ON b.id = i.batch_id`;
+
 const DURATION_S = 8; // Veo renders 1080p only at 8 s
 const RESOLUTION = '1080p';
 const MAX_POLL_FAILURES = 5;
@@ -126,8 +138,17 @@ export class AnimationService {
     return this.db.prepare('SELECT * FROM animations WHERE image_id = ? ORDER BY id DESC').all(imageId) as AnimationRow[];
   }
 
-  listRecent(limit = 30): AnimationRow[] {
-    return this.db.prepare('SELECT * FROM animations ORDER BY id DESC LIMIT ?').all(limit) as AnimationRow[];
+  /** Newest first, with the source image's thumbnail for the Animations tab. */
+  listRecent(limit = 60): AnimationWithImage[] {
+    return this.db
+      .prepare(`${WITH_IMAGE_SQL} ORDER BY a.id DESC LIMIT ?`)
+      .all(limit) as AnimationWithImage[];
+  }
+
+  getWithImage(id: number): AnimationWithImage {
+    const row = this.db.prepare(`${WITH_IMAGE_SQL} WHERE a.id = ?`).get(id) as AnimationWithImage | undefined;
+    if (!row) throw new NotFoundError(`Animation ${id} not found`);
+    return row;
   }
 
   setStarred(id: number, starred: boolean): AnimationRow {

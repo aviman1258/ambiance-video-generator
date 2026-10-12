@@ -1,21 +1,28 @@
 // Ambiance Studio. Plain DOM, no build step. Hash routes:
-//   #/new, #/saved, #/all  → home tabs
-//   #/image/<id>           → one image (tags, actions, animation)
+//   #/new, #/saved, #/all, #/animations  → home tabs
+//   #/image/<id>                          → one image, as a layer over the grid
+//   #/animation/<id>                      → one animation, as a layer over the grid
+import { sceneProblem } from '/scene-check.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PAGE_SIZE = 60;
+const TABS = { '#/new': 'new', '#/saved': 'saved', '#/all': 'all', '#/animations': 'animations' };
 
 const state = {
   config: null,
   tab: 'new',
+  homeShown: false,
+  scrollTopNext: false,
   search: { saved: '', all: '' },
   library: { items: [], total: 0, key: '' },
-  pending: [], // generations in progress: { id, scene, error? }
-  image: null, // the image page's image
+  animations: [],
+  pending: [], // image generations in progress: { id, scene, error? }
+  image: null, // the open image
+  motionFor: null, // image id the motion prompt was suggested for
   suggestedMotion: '',
-  takes: [],
+  animation: null, // the open animation
   cameFromApp: false,
-  timers: { takes: null, search: null },
+  timers: { search: null, animations: null, animation: null },
 };
 
 // ---------- helpers ----------
@@ -50,30 +57,17 @@ async function api(path, opts = {}) {
 
 const money = (n) => `$${n.toFixed(2)}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function showError(el, err) {
   el.textContent = err ? (err.message ?? String(err)) : '';
   el.hidden = !err;
 }
 
-/** Two-step button for anything that spends money: first click arms it, second click within 5 s runs it. */
-function armedButton(button, labelFn, costFn, action) {
-  let armedUntil = 0;
-  const reset = () => {
-    armedUntil = 0;
-    button.classList.remove('confirm');
-    button.textContent = labelFn();
-  };
+/** Runs the action with the button disabled, so a double tap can't fire it twice. */
+function onTap(button, action) {
   button.addEventListener('click', async () => {
-    const cost = costFn();
-    if (cost > 0 && Date.now() > armedUntil) {
-      armedUntil = Date.now() + 5000;
-      button.classList.add('confirm');
-      button.textContent = `Confirm: spend ${money(cost)}`;
-      setTimeout(() => Date.now() > armedUntil && reset(), 5100);
-      return;
-    }
-    reset();
+    if (button.disabled) return;
     button.disabled = true;
     try {
       await action();
@@ -81,13 +75,31 @@ function armedButton(button, labelFn, costFn, action) {
       button.disabled = false;
     }
   });
-  reset();
+}
+
+/** For the expensive action (animation): first tap arms it, a second tap within 5 s runs it. */
+function confirmTap(button, label, action) {
+  let armedUntil = 0;
+  const reset = () => {
+    armedUntil = 0;
+    button.classList.remove('confirm');
+    button.textContent = label;
+  };
+  onTap(button, async () => {
+    if (Date.now() > armedUntil) {
+      armedUntil = Date.now() + 5000;
+      button.classList.add('confirm');
+      button.textContent = 'Tap again to start';
+      setTimeout(() => Date.now() > armedUntil && reset(), 5100);
+      return;
+    }
+    reset();
+    await action();
+  });
   return reset;
 }
 
-const costSuffix = (usd) => (usd > 0 ? ` · ~${money(usd)}` : '');
-
-// ---------- config / spend ----------
+// ---------- config / spend / counts ----------
 
 async function loadConfig() {
   state.config = await api('/api/config');
@@ -109,9 +121,11 @@ function renderSpend(s) {
 const refreshSpend = async () => renderSpend(await api('/api/spend'));
 
 async function refreshCounts() {
-  const [all, saved] = await Promise.all([api('/api/images?limit=1'), api('/api/images?limit=1&saved=1')]);
+  const [all, saved, anims] = await Promise.all([api('/api/images?limit=1'), api('/api/images?limit=1&saved=1'), api('/api/animations')]);
   $('#all-count').textContent = all.total ? `(${all.total})` : '';
   $('#saved-count').textContent = saved.total ? `(${saved.total})` : '';
+  const running = anims.filter((a) => a.status === 'pending' || a.status === 'running').length;
+  $('#animations-count').textContent = anims.length ? `(${anims.length}${running ? ` · ${running} in progress` : ''})` : '';
 }
 
 // ---------- routing ----------
@@ -119,24 +133,33 @@ async function refreshCounts() {
 function route() {
   const hash = location.hash || '#/new';
   const imageMatch = hash.match(/^#\/image\/(\d+)/);
-  clearTimeout(state.timers.takes);
-  const overlay = $('#image-view');
+  const animationMatch = hash.match(/^#\/animation\/(\d+)/);
+  clearTimeout(state.timers.animation);
 
-  if (imageMatch) {
-    // The image opens as a layer over the grid; the grid underneath keeps its scroll position.
-    if (!state.homeShown) showHome(state.tab === 'new' ? 'all' : state.tab, { scrollTop: true }); // opened from a direct link
-    overlay.hidden = false;
-    document.body.classList.add('no-scroll');
-    openImage(Number(imageMatch[1]));
+  if (imageMatch || animationMatch) {
+    // Layers over the grid; the grid underneath keeps its scroll position.
+    if (!state.homeShown) showHome(animationMatch ? 'animations' : state.tab === 'new' ? 'all' : state.tab, { scrollTop: true });
+    showOverlay(imageMatch ? '#image-view' : '#animation-view');
+    if (imageMatch) openImage(Number(imageMatch[1]));
+    else openAnimation(Number(animationMatch[1]));
     return;
   }
 
-  const closingOverlay = !overlay.hidden;
-  overlay.hidden = true;
-  document.body.classList.remove('no-scroll');
-  const tab = { '#/saved': 'saved', '#/all': 'all' }[hash] ?? 'new';
+  const closingOverlay = !!openOverlay();
+  showOverlay(null);
+  const tab = TABS[hash] ?? 'new';
   const backToSameGrid = closingOverlay && tab === state.tab;
   showHome(tab, { scrollTop: !backToSameGrid, keepCount: backToSameGrid });
+}
+
+function openOverlay() {
+  return ['#image-view', '#animation-view'].find((sel) => !$(sel).hidden);
+}
+
+function showOverlay(sel) {
+  for (const s of ['#image-view', '#animation-view']) $(s).hidden = s !== sel;
+  document.body.classList.toggle('no-scroll', !!sel);
+  if (sel !== '#animation-view') $('#animation-media').replaceChildren(); // stop any playing video
 }
 
 function showHome(tab, { scrollTop, keepCount = false }) {
@@ -144,13 +167,16 @@ function showHome(tab, { scrollTop, keepCount = false }) {
   state.tab = tab;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
   $('#new-tab').hidden = tab !== 'new';
-  $('#library-tab').hidden = tab === 'new';
-  if (tab !== 'new') {
+  $('#library-tab').hidden = tab !== 'saved' && tab !== 'all';
+  $('#animations-tab').hidden = tab !== 'animations';
+  if (tab === 'saved' || tab === 'all') {
     $('#search').value = state.search[tab];
     // Coming back from an image: refresh in place (stars/tags may have changed) without losing loaded pages.
     loadLibrary({ reset: true, keepCount });
     loadTagChips();
   }
+  if (tab === 'animations') loadAnimations();
+  else clearTimeout(state.timers.animations);
   if (scrollTop || state.scrollTopNext) window.scrollTo(0, 0);
   state.scrollTopNext = false;
 }
@@ -160,9 +186,29 @@ window.addEventListener('hashchange', () => {
   route();
 });
 
-// ---------- generating ----------
+for (const back of document.querySelectorAll('.back')) {
+  back.addEventListener('click', () => {
+    if (state.cameFromApp && history.length > 1) history.back();
+    else location.hash = openOverlay() === '#animation-view' ? '#/animations' : '#/all';
+  });
+}
 
-/** Starts a generation, shows it as a "generating" tile in All images, then opens the new image. */
+// ---------- new scene ----------
+
+function updateGenerateButton() {
+  const text = $('#scene').value;
+  const problem = sceneProblem(text);
+  $('#generate').disabled = !!problem;
+  const hint = $('#scene-hint');
+  hint.hidden = !problem || text.trim().length === 0; // nothing typed yet: just the grey button
+  hint.textContent = problem ?? '';
+}
+$('#scene').addEventListener('input', updateGenerateButton);
+
+/**
+ * Starts a generation and shows a "generating" tile in All images. Resolves once the request is
+ * accepted; a background check opens the new image when it's ready.
+ */
 async function generate(body, errorEl) {
   showError(errorEl, null);
   let gen;
@@ -181,12 +227,15 @@ async function generate(body, errorEl) {
     state.scrollTopNext = true; // so the "Generating…" tile at the top of the grid is in view
     location.hash = '#/all';
   }
+  watchGeneration(gen.id, pending);
+}
 
+async function watchGeneration(id, pending) {
   while (true) {
     await sleep(2000);
     let latest;
     try {
-      latest = await api(`/api/generations/${gen.id}`);
+      latest = await api(`/api/generations/${id}`);
     } catch {
       continue;
     }
@@ -252,7 +301,7 @@ function renderLibrary() {
     ),
   );
   $('#library-grid').replaceChildren(...pendingTiles, ...tiles);
-  $('#library-summary').textContent = total ? `${total} image${total === 1 ? '' : 's'}${q ? ` tagged “${q}”` : ''}` : '';
+  $('#library-summary').textContent = total ? `${plural(total, 'image')}${q ? ` tagged “${q}”` : ''}` : '';
   const empty = $('#library-empty');
   empty.hidden = items.length > 0 || pendingTiles.length > 0;
   empty.textContent = q
@@ -293,11 +342,110 @@ $('#search').addEventListener('input', () => {
 });
 $('#load-more').addEventListener('click', () => loadLibrary({ reset: false }));
 
-// ---------- image page ----------
+// ---------- animations tab ----------
+
+const isRunning = (a) => a.status === 'pending' || a.status === 'running';
+
+async function loadAnimations() {
+  clearTimeout(state.timers.animations);
+  state.animations = await api('/api/animations');
+  if (state.tab !== 'animations') return;
+  renderAnimations();
+  // Keep checking while anything is still animating.
+  if (state.animations.some(isRunning)) {
+    state.timers.animations = setTimeout(() => {
+      if (state.tab === 'animations') {
+        loadAnimations();
+        refreshCounts();
+        refreshSpend();
+      }
+    }, 5000);
+  }
+}
+
+function renderAnimations() {
+  const list = state.animations;
+  const running = list.filter(isRunning).length;
+  $('#animations-summary').textContent = list.length ? `${plural(list.length, 'animation')}${running ? ` · ${running} in progress` : ''}` : '';
+  $('#animations-empty').hidden = list.length > 0;
+  $('#animations-grid').replaceChildren(
+    ...list.map((a) =>
+      h(
+        'a',
+        { class: `thumb anim ${a.status}`, href: `#/animation/${a.id}`, title: a.motion_prompt },
+        h('img', { src: a.imageThumbUrl, loading: 'lazy', alt: a.scene_prompt }),
+        isRunning(a) ? h('span', { class: 'thumb-label' }, 'Animating…') : a.status === 'failed' ? h('span', { class: 'thumb-label bad' }, 'Failed') : h('span', { class: 'play' }, '▶'),
+        h('span', { class: 'thumb-badges' }, a.starred && h('span', { class: 'tb star-badge' }, '★ Best')),
+      ),
+    ),
+  );
+}
+
+// ---------- one animation ----------
+
+async function openAnimation(id) {
+  clearTimeout(state.timers.animation);
+  $('#animation-view').scrollTop = 0;
+  showError($('#animation-error'), null);
+  let a;
+  try {
+    a = await api(`/api/animations/${id}`);
+  } catch (e) {
+    showError($('#animation-error'), e);
+    return;
+  }
+  if (!location.hash.startsWith(`#/animation/${id}`)) return;
+  state.animation = a;
+  renderAnimation();
+  if (isRunning(a)) state.timers.animation = setTimeout(() => openAnimation(id), 5000);
+  else refreshSpend();
+}
+
+function renderAnimation() {
+  const a = state.animation;
+  const media = $('#animation-media');
+  const current = media.querySelector('video');
+  if (a.status === 'succeeded') {
+    if (!current || current.dataset.id !== String(a.id)) {
+      const video = h('video', { class: 'player', src: a.url, autoplay: true, loop: true, muted: true, playsinline: true, controls: true, 'data-id': String(a.id) });
+      video.muted = true; // the attribute alone doesn't mute in every browser
+      media.replaceChildren(video);
+    }
+  } else {
+    media.replaceChildren(
+      h(
+        'div',
+        { class: 'player-wait' },
+        h('img', { src: a.imagePreviewUrl, alt: '' }),
+        h('span', { class: a.status === 'failed' ? 'thumb-label bad' : 'thumb-label' }, a.status === 'failed' ? 'Failed' : 'Animating… usually a few minutes'),
+      ),
+    );
+  }
+  $('#animation-meta').textContent = `#${a.id} · ${a.duration_s}s ${a.resolution} · loops back to the first frame · ${new Date(a.created_at).toLocaleString()}`;
+  showError($('#animation-error'), a.error ? new Error(a.error) : null);
+  $('#animation-image-link').href = `#/image/${a.image_id}`;
+  const file = $('#animation-file-link');
+  file.hidden = a.status !== 'succeeded';
+  if (a.url) file.href = a.url;
+  const best = $('#best-toggle');
+  best.hidden = a.status !== 'succeeded';
+  best.textContent = a.starred ? '★ Best' : '☆ Best';
+  best.classList.toggle('on', a.starred);
+  $('#animation-motion').textContent = a.motion_prompt;
+}
+
+onTap($('#best-toggle'), async () => {
+  state.animation = await api(`/api/animations/${state.animation.id}`, { method: 'PATCH', body: { starred: !state.animation.starred } });
+  renderAnimation();
+});
+
+// ---------- one image ----------
 
 async function openImage(id) {
   showError($('#image-error'), null);
   showError($('#animate-error'), null);
+  $('#animate-panel').hidden = true;
+  $('#animate-status').hidden = true;
   $('#image-view').scrollTop = 0;
   // Show the grid's thumbnail instantly (if we have it) while the full details load.
   const known = state.library.items.find((i) => i.id === id);
@@ -312,10 +460,7 @@ async function openImage(id) {
   if (!location.hash.startsWith(`#/image/${id}`)) return; // closed or moved on while loading
   state.image = img;
   renderImage();
-  const { motionPrompt } = await api(`/api/images/${id}/motion-suggestion`);
-  state.suggestedMotion = motionPrompt;
-  $('#motion').value = motionPrompt;
-  loadTakes();
+  refreshAnimateStatus();
 }
 
 function renderImage() {
@@ -335,6 +480,21 @@ function renderImage() {
   $('#image-scene').textContent = img.scene_prompt;
   $('#image-prompt').textContent = img.full_prompt;
   renderTags();
+}
+
+/** One line under the buttons: what's animating for this image, or how many animations it has. */
+async function refreshAnimateStatus() {
+  const img = state.image;
+  const takes = await api(`/api/animations?imageId=${img.id}`);
+  if (state.image?.id !== img.id) return;
+  const running = takes.filter(isRunning).length;
+  const done = takes.filter((t) => t.status === 'succeeded').length;
+  const status = $('#animate-status');
+  status.hidden = !running && !done;
+  status.replaceChildren(
+    running ? `Animating… it'll show up in the Animations tab in a few minutes. ` : `${plural(done, 'animation')} of this image. `,
+    h('a', { href: '#/animations' }, 'Open Animations'),
+  );
 }
 
 function renderTags() {
@@ -371,64 +531,31 @@ $('#tag-form').addEventListener('submit', (e) => {
   saveTags([...state.image.tags, ...added]);
 });
 
-$('#save-toggle').addEventListener('click', async () => {
+onTap($('#save-toggle'), async () => {
   state.image = await api(`/api/images/${state.image.id}`, { method: 'PATCH', body: { saved: !state.image.saved } });
   renderImage();
   refreshCounts();
 });
 
-$('#jump-animate').addEventListener('click', () => $('#animate-section').scrollIntoView({ behavior: 'smooth', block: 'start' }));
-
-$('#back').addEventListener('click', () => {
-  if (state.cameFromApp && history.length > 1) history.back();
-  else location.hash = '#/all';
+// Animate opens right under the buttons.
+onTap($('#toggle-animate'), async () => {
+  const panel = $('#animate-panel');
+  if (!panel.hidden) {
+    panel.hidden = true;
+    return;
+  }
+  showError($('#animate-error'), null);
+  if (state.motionFor !== state.image.id) {
+    const { motionPrompt } = await api(`/api/images/${state.image.id}/motion-suggestion`);
+    state.suggestedMotion = motionPrompt;
+    state.motionFor = state.image.id;
+    $('#motion').value = motionPrompt;
+  }
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
-
-// ---------- animation takes ----------
-
+$('#cancel-animate').addEventListener('click', () => ($('#animate-panel').hidden = true));
 $('#reset-motion').addEventListener('click', () => ($('#motion').value = state.suggestedMotion));
-
-async function loadTakes() {
-  clearTimeout(state.timers.takes);
-  const img = state.image;
-  if (!img || $('#image-view').hidden) return;
-  const takes = await api(`/api/animations?imageId=${img.id}`);
-  if (state.image?.id !== img.id) return;
-  state.takes = takes;
-  renderTakes();
-  if (takes.some((t) => t.status === 'pending' || t.status === 'running')) state.timers.takes = setTimeout(loadTakes, 3000);
-  refreshSpend();
-}
-
-function renderTakes() {
-  $('#takes-empty').hidden = state.takes.length > 0;
-  $('#takes').replaceChildren(
-    ...state.takes.map((t) => {
-      const media =
-        t.status === 'succeeded'
-          ? h('video', { class: 'media', src: t.url, autoplay: true, loop: true, muted: true, playsinline: true, controls: true })
-          : t.status === 'failed'
-            ? h('img', { class: 'media', src: state.image.thumbUrl, alt: '', style: 'opacity:.35' })
-            : h('div', { class: 'skeleton' }, h('span', {}, 'Animating… a few minutes'));
-      if (media.tagName === 'VIDEO') media.muted = true; // the attribute alone doesn't mute in every browser
-      return h(
-        'div',
-        { class: 'card' },
-        media,
-        h(
-          'div',
-          { class: 'actions' },
-          h('span', { class: `pill ${t.status}` }, t.status === 'running' ? 'generating…' : t.status),
-          h('span', { class: 'grow' }),
-          t.status === 'succeeded' && h('a', { href: t.url, target: '_blank', rel: 'noopener', class: 'button-link' }, 'Open'),
-          t.status === 'succeeded' &&
-            h('button', { class: `star${t.starred ? ' on' : ''}`, onclick: async () => { await api(`/api/animations/${t.id}`, { method: 'PATCH', body: { starred: !t.starred } }); loadTakes(); } }, t.starred ? '★ Best' : '☆ Best'),
-        ),
-        h('div', { class: 'meta', title: t.motion_prompt }, `#${t.id} · ${t.duration_s}s ${t.resolution}`, t.error && h('p', { class: 'error' }, t.error)),
-      );
-    }),
-  );
-}
 
 // ---------- wire up ----------
 
@@ -439,35 +566,32 @@ $('#logout').addEventListener('click', async () => {
 
 async function init() {
   await loadConfig();
-  const genCost = () => state.config.generationCostUsd;
 
-  armedButton(
-    $('#generate'),
-    () => `Generate ${state.config.imagesPerBatch === 1 ? 'image' : `${state.config.imagesPerBatch} images`}${costSuffix(genCost())}`,
-    genCost,
-    () => generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error')),
-  );
-  armedButton($('#more-like-this'), () => `More like this${costSuffix(genCost())}`, genCost, () =>
-    generate({ referenceImageId: state.image.id }, $('#image-error')),
-  );
-  armedButton($('#generate-another'), () => `Generate another${costSuffix(genCost())}`, genCost, () =>
+  $('#generate').addEventListener('click', async () => {
+    if ($('#generate').disabled) return;
+    $('#generate').disabled = true;
+    await generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error'));
+    updateGenerateButton(); // back to grey if the box no longer holds a usable scene
+  });
+  onTap($('#more-like-this'), () => generate({ referenceImageId: state.image.id }, $('#image-error')));
+  onTap($('#generate-another'), () =>
     generate({ scenePrompt: state.image.scene_prompt, stylePreset: state.image.style_preset, parentBatchId: state.image.batch_id }, $('#image-error')),
   );
-  armedButton(
-    $('#start-animation'),
-    () => `Animate${costSuffix(state.config.animationCostUsd)}`,
-    () => state.config.animationCostUsd,
-    async () => {
-      showError($('#animate-error'), null);
-      try {
-        await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
-        await loadTakes();
-      } catch (e) {
-        showError($('#animate-error'), e);
-      }
-    },
-  );
+  confirmTap($('#start-animation'), 'Start animation', async () => {
+    showError($('#animate-error'), null);
+    try {
+      await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });
+    } catch (e) {
+      showError($('#animate-error'), e);
+      return;
+    }
+    $('#animate-panel').hidden = true;
+    refreshAnimateStatus();
+    refreshCounts();
+    refreshSpend();
+  });
 
+  updateGenerateButton();
   refreshCounts();
   route();
 }

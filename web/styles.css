@@ -164,3 +164,25 @@ a { color: var(--accent); }
 }
 .overlay-inner { max-width: 1280px; margin: 0 auto; padding: 14px 16px calc(40px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 14px; }
 body.no-scroll { overflow: hidden; }
+
+/* gray (not just faded) when a primary action isn't available yet */
+button.primary:disabled { background: var(--panel-2); border-color: var(--line); color: var(--muted); opacity: 1; }
+
+/* animate panel that opens under the image's buttons */
+.inline-panel { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel-2); }
+.inline-panel label:first-child { margin-top: 0; }
+.notice { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--panel-2); color: var(--muted); font-size: 13.5px; }
+
+/* animation tiles and player */
+.thumb-label { position: absolute; left: 8px; bottom: 8px; background: rgba(15, 12, 10, 0.8); color: var(--accent); font-size: 12px; padding: 2px 8px; border-radius: 99px; }
+.thumb-label.bad { color: var(--bad); }
+.thumb.anim.running img, .thumb.anim.pending img { opacity: 0.55; }
+.thumb.anim.failed img { opacity: 0.35; }
+.play { position: absolute; inset: 0; display: grid; place-items: center; font-size: 30px; color: rgba(255, 255, 255, 0.9); text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6); }
+.player { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); background: #0e0c0a; display: block; }
+.player-wait { position: relative; }
+.player-wait img { width: 100%; border-radius: var(--radius); display: block; opacity: 0.5; }
+@media (max-width: 640px) {
+  .tabs { flex-wrap: nowrap; overflow-x: auto; gap: 2px; scrollbar-width: none; }
+  .tab { padding: 6px 8px; font-size: 14px; white-space: nowrap; }
+}
