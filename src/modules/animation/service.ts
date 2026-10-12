@@ -1,9 +1,9 @@
-import type { AssetStore } from '../../core/assets.ts';
+import { type AssetStore, removeOrphans } from '../../core/assets.ts';
 import type { CostGuard } from '../../core/cost.ts';
 import { type Db, now } from '../../core/db.ts';
 import type { Logger } from '../../core/log.ts';
 import type { VideoGenerator } from '../../providers/types.ts';
-import { BadRequestError, type ImageService, NotFoundError } from '../images/service.ts';
+import { BadRequestError, ConflictError, type ImageService, NotFoundError } from '../images/service.ts';
 import { suggestMotionPrompt } from './motion.ts';
 
 export type AnimationStatus = 'pending' | 'running' | 'succeeded' | 'failed';
@@ -138,10 +138,10 @@ export class AnimationService {
     return this.db.prepare('SELECT * FROM animations WHERE image_id = ? ORDER BY id DESC').all(imageId) as AnimationRow[];
   }
 
-  /** Newest first, with the source image's thumbnail for the Animations tab. */
+  /** Newest first, with the source image's thumbnail, for the Animations tab. Failed ones are left out. */
   listRecent(limit = 60): AnimationWithImage[] {
     return this.db
-      .prepare(`${WITH_IMAGE_SQL} ORDER BY a.id DESC LIMIT ?`)
+      .prepare(`${WITH_IMAGE_SQL} WHERE a.status != 'failed' ORDER BY a.id DESC LIMIT ?`)
       .all(limit) as AnimationWithImage[];
   }
 
@@ -155,6 +155,17 @@ export class AnimationService {
     this.get(id);
     this.db.prepare('UPDATE animations SET starred = ?, updated_at = ? WHERE id = ?').run(starred ? 1 : 0, now(), id);
     return this.get(id);
+  }
+
+  /** Deletes a finished (or failed) animation and its clip file. In-progress ones can't be deleted. */
+  async delete(id: number): Promise<void> {
+    const row = this.get(id);
+    if (row.status === 'pending' || row.status === 'running') {
+      throw new ConflictError('This animation is still being made. Delete it once it finishes.');
+    }
+    this.db.prepare('DELETE FROM animations WHERE id = ?').run(id);
+    await removeOrphans(this.db, this.assets, [row.file_path]);
+    this.log.info({ animationId: id }, 'animation deleted');
   }
 
   /** Resolves when every in-flight animation has settled (used by tests and shutdown). */

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildApp } from '../src/server/app.ts';
-import { makeServices } from './helpers.ts';
+import { FakeVideoGenerator, makeServices } from './helpers.ts';
 
 async function setup() {
   const services = makeServices();
@@ -55,10 +55,9 @@ test('generate → list → search by tag → edit tags → save', async () => {
   assert.equal((await app.inject('/api/images?q=snow')).json().total, 0);
   assert.deepEqual((await app.inject('/api/tags')).json().map((t: { tag: string }) => t.tag).sort(), ['kolkata', 'night', 'rain', 'warm light']);
 
-  const edited = await app.inject({ method: 'PATCH', url: `/api/images/${id}`, payload: { tags: ['Tea Estate', 'mist'], saved: true } });
+  const edited = await app.inject({ method: 'PATCH', url: `/api/images/${id}`, payload: { tags: ['Tea Estate', 'mist'] } });
   assert.deepEqual(edited.json().tags, ['tea estate', 'mist']);
-  assert.equal(edited.json().saved, true);
-  assert.equal((await app.inject('/api/images?saved=1&q=tea')).json().total, 1);
+  assert.equal((await app.inject('/api/images?q=tea')).json().total, 1);
 
   const detail = (await app.inject(`/api/images/${id}`)).json();
   assert.equal(detail.scene_prompt, 'Darjeeling tea estate in mist');
@@ -91,6 +90,29 @@ test('animate an image over HTTP and stream the clip with range requests', async
   assert.equal(clip.statusCode, 206, 'range requests work so <video> can loop and seek');
   assert.equal((await app.inject('/api/animations/999')).statusCode, 404);
   assert.equal((await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId: 'abc' } })).statusCode, 400);
+});
+
+test('failed animations are hidden from the Animations list; deleting works over HTTP', async () => {
+  const { app, services } = await setup();
+  const gen = await generate(app, 'Shimla cottage in the snow');
+  const imageId = gen.images[0].id;
+
+  (services.videoGen as FakeVideoGenerator).script = [{ state: 'failed', error: 'Blocked by Veo safety filter' }];
+  const failed = (await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId, motionPrompt: 'snow' } })).json();
+  await services.animations.idle();
+  (services.videoGen as FakeVideoGenerator).script = [{ state: 'succeeded', videoRef: 'ok' }];
+  const good = (await app.inject({ method: 'POST', url: '/api/animations', payload: { imageId, motionPrompt: 'snow falling' } })).json();
+  await services.animations.idle();
+
+  assert.deepEqual((await app.inject('/api/animations')).json().map((a: { id: number }) => a.id), [good.id], 'failed one left out');
+  const forImage = (await app.inject(`/api/animations?imageId=${imageId}`)).json();
+  assert.equal(forImage.length, 2, 'the image page still sees the failure');
+
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/animations/${failed.id}` })).statusCode, 204);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/images/${imageId}` })).statusCode, 204);
+  assert.equal((await app.inject(`/api/images/${imageId}`)).statusCode, 404);
+  assert.equal((await app.inject(`/api/animations/${good.id}`)).statusCode, 404, 'its animations went with it');
+  assert.equal((await app.inject({ method: 'DELETE', url: '/api/images/999' })).statusCode, 404);
 });
 
 test('the page is served at /', async () => {

@@ -1,19 +1,19 @@
 // Ambiance Studio. Plain DOM, no build step. Hash routes:
-//   #/new, #/saved, #/all, #/animations  → home tabs
+//   #/new, #/all, #/animations           → home tabs
 //   #/image/<id>                          → one image, as a layer over the grid
 //   #/animation/<id>                      → one animation, as a layer over the grid
 import { sceneProblem } from '/scene-check.js';
 
 const $ = (sel) => document.querySelector(sel);
 const PAGE_SIZE = 60;
-const TABS = { '#/new': 'new', '#/saved': 'saved', '#/all': 'all', '#/animations': 'animations' };
+const TABS = { '#/new': 'new', '#/all': 'all', '#/animations': 'animations' };
 
 const state = {
   config: null,
   tab: 'new',
   homeShown: false,
   scrollTopNext: false,
-  search: { saved: '', all: '' },
+  search: { all: '' },
   library: { items: [], total: 0, key: '' },
   animations: [],
   pending: [], // image generations in progress: { id, scene, error? }
@@ -77,27 +77,28 @@ function onTap(button, action) {
   });
 }
 
-/** For the expensive action (animation): first tap arms it, a second tap within 5 s runs it. */
-function confirmTap(button, label, action) {
-  let armedUntil = 0;
-  const reset = () => {
-    armedUntil = 0;
-    button.classList.remove('confirm');
-    button.textContent = label;
-  };
-  onTap(button, async () => {
-    if (Date.now() > armedUntil) {
-      armedUntil = Date.now() + 5000;
-      button.classList.add('confirm');
-      button.textContent = 'Tap again to start';
-      setTimeout(() => Date.now() > armedUntil && reset(), 5100);
-      return;
-    }
-    reset();
-    await action();
-  });
-  return reset;
+/**
+ * Asks before anything that costs money or deletes something. Resolves true only on the confirm
+ * button; Cancel, Escape or tapping outside all count as no.
+ */
+function askConfirm({ title, body, confirmLabel, danger = false }) {
+  const dialog = $('#confirm-dialog');
+  $('#confirm-title').textContent = title;
+  $('#confirm-body').textContent = body;
+  const ok = $('#confirm-ok');
+  ok.textContent = confirmLabel;
+  ok.className = danger ? 'danger' : 'primary';
+  dialog.returnValue = '';
+  dialog.showModal();
+  return new Promise((resolve) => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true }));
 }
+
+// Tapping the dimmed area outside the box cancels.
+$('#confirm-dialog').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.close('cancel');
+});
+
+const PAID = 'This uses your Gemini API credit.';
 
 // ---------- config / spend / counts ----------
 
@@ -121,9 +122,8 @@ function renderSpend(s) {
 const refreshSpend = async () => renderSpend(await api('/api/spend'));
 
 async function refreshCounts() {
-  const [all, saved, anims] = await Promise.all([api('/api/images?limit=1'), api('/api/images?limit=1&saved=1'), api('/api/animations')]);
+  const [all, anims] = await Promise.all([api('/api/images?limit=1'), api('/api/animations')]);
   $('#all-count').textContent = all.total ? `(${all.total})` : '';
-  $('#saved-count').textContent = saved.total ? `(${saved.total})` : '';
   const running = anims.filter((a) => a.status === 'pending' || a.status === 'running').length;
   $('#animations-count').textContent = anims.length ? `(${anims.length}${running ? ` · ${running} in progress` : ''})` : '';
 }
@@ -167,9 +167,9 @@ function showHome(tab, { scrollTop, keepCount = false }) {
   state.tab = tab;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
   $('#new-tab').hidden = tab !== 'new';
-  $('#library-tab').hidden = tab !== 'saved' && tab !== 'all';
+  $('#library-tab').hidden = tab !== 'all';
   $('#animations-tab').hidden = tab !== 'animations';
-  if (tab === 'saved' || tab === 'all') {
+  if (tab === 'all') {
     $('#search').value = state.search[tab];
     // Coming back from an image: refresh in place (stars/tags may have changed) without losing loaded pages.
     loadLibrary({ reset: true, keepCount });
@@ -264,7 +264,6 @@ async function loadLibrary({ reset, keepCount = false }) {
   const limit = keepCount && state.library.key === key ? Math.max(PAGE_SIZE, state.library.items.length) : PAGE_SIZE;
   const params = new URLSearchParams({ limit: String(Math.min(limit, 200)), offset: String(offset) });
   if (q) params.set('q', q);
-  if (tab === 'saved') params.set('saved', '1');
   const page = await api(`/api/images?${params}`);
   if (`${state.tab}|${state.search[state.tab]}` !== key) return; // a newer search won
   state.library = { key, total: page.total, items: reset ? page.items : [...state.library.items, ...page.items] };
@@ -276,7 +275,7 @@ function renderLibrary() {
   const tab = state.tab;
   const q = state.search[tab];
   const pendingTiles =
-    tab === 'all' && !q
+    !q
       ? state.pending.map((p) =>
           h(
             'div',
@@ -295,7 +294,6 @@ function renderLibrary() {
       h(
         'span',
         { class: 'thumb-badges' },
-        img.saved && h('span', { class: 'tb star-badge' }, '★'),
         img.animation_count > 0 && h('span', { class: 'tb' }, `▶ ${img.animation_count}`),
       ),
     ),
@@ -304,11 +302,7 @@ function renderLibrary() {
   $('#library-summary').textContent = total ? `${plural(total, 'image')}${q ? ` tagged “${q}”` : ''}` : '';
   const empty = $('#library-empty');
   empty.hidden = items.length > 0 || pendingTiles.length > 0;
-  empty.textContent = q
-    ? 'No images match those tags.'
-    : tab === 'saved'
-      ? 'Nothing saved yet. Open an image and tap ☆ Save to keep it here.'
-      : 'No images yet. Describe a scene in the New scene tab.';
+  empty.textContent = q ? 'No images match those tags.' : 'No images yet. Describe a scene in the New scene tab.';
   $('#load-more').hidden = items.length >= total;
 }
 
@@ -427,12 +421,31 @@ function renderAnimation() {
   const file = $('#animation-file-link');
   file.hidden = a.status !== 'succeeded';
   if (a.url) file.href = a.url;
+  $('#delete-animation').hidden = isRunning(a);
   const best = $('#best-toggle');
   best.hidden = a.status !== 'succeeded';
   best.textContent = a.starred ? '★ Best' : '☆ Best';
   best.classList.toggle('on', a.starred);
   $('#animation-motion').textContent = a.motion_prompt;
 }
+
+onTap($('#delete-animation'), async () => {
+  const yes = await askConfirm({
+    title: 'Delete this animation?',
+    body: 'The video is deleted; the image stays. This can’t be undone.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!yes) return;
+  try {
+    await api(`/api/animations/${state.animation.id}`, { method: 'DELETE' });
+  } catch (e) {
+    showError($('#animation-error'), e);
+    return;
+  }
+  refreshCounts();
+  leaveOverlay('#/animations');
+});
 
 onTap($('#best-toggle'), async () => {
   state.animation = await api(`/api/animations/${state.animation.id}`, { method: 'PATCH', body: { starred: !state.animation.starred } });
@@ -468,9 +481,6 @@ function renderImage() {
   $('#image-preview').src = img.previewUrl;
   $('#image-preview').alt = img.tags.join(', ');
   $('#full-link').href = img.url;
-  const save = $('#save-toggle');
-  save.textContent = img.saved ? '★ Saved' : '☆ Save';
-  save.classList.toggle('on', img.saved);
   const created = new Date(img.created_at).toLocaleString();
   $('#image-meta').replaceChildren(
     `#${img.id}${img.width ? ` · ${img.width}×${img.height}` : ''} · ${created}`,
@@ -489,11 +499,18 @@ async function refreshAnimateStatus() {
   if (state.image?.id !== img.id) return;
   const running = takes.filter(isRunning).length;
   const done = takes.filter((t) => t.status === 'succeeded').length;
+  const latest = takes[0]; // newest first
+  const failed = latest?.status === 'failed';
   const status = $('#animate-status');
-  status.hidden = !running && !done;
+  status.hidden = !running && !done && !failed;
+  status.classList.toggle('bad', failed && !running);
   status.replaceChildren(
-    running ? `Animating… it'll show up in the Animations tab in a few minutes. ` : `${plural(done, 'animation')} of this image. `,
-    h('a', { href: '#/animations' }, 'Open Animations'),
+    running
+      ? `Animating… it'll show up in the Animations tab in a few minutes. `
+      : failed
+        ? `The last animation failed: ${latest.error ?? 'unknown error'} `
+        : `${plural(done, 'animation')} of this image. `,
+    (running || done) && h('a', { href: '#/animations' }, 'Open Animations'),
   );
 }
 
@@ -531,11 +548,30 @@ $('#tag-form').addEventListener('submit', (e) => {
   saveTags([...state.image.tags, ...added]);
 });
 
-onTap($('#save-toggle'), async () => {
-  state.image = await api(`/api/images/${state.image.id}`, { method: 'PATCH', body: { saved: !state.image.saved } });
-  renderImage();
+onTap($('#delete-image'), async () => {
+  const yes = await askConfirm({
+    title: 'Delete this image?',
+    body: 'Its animations and tags are deleted too. This can’t be undone.',
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!yes) return;
+  try {
+    await api(`/api/images/${state.image.id}`, { method: 'DELETE' });
+  } catch (e) {
+    showError($('#image-error'), e);
+    return;
+  }
+  state.library.items = state.library.items.filter((i) => i.id !== state.image.id);
   refreshCounts();
+  leaveOverlay('#/all');
 });
+
+/** Closes a layer after its item was deleted: back to where they came from, else to the given tab. */
+function leaveOverlay(fallback) {
+  if (state.cameFromApp && history.length > 1) history.back();
+  else location.hash = fallback;
+}
 
 // Animate opens right under the buttons.
 onTap($('#toggle-animate'), async () => {
@@ -570,14 +606,26 @@ async function init() {
   $('#generate').addEventListener('click', async () => {
     if ($('#generate').disabled) return;
     $('#generate').disabled = true;
-    await generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error'));
+    if (await askConfirm({ title: 'Generate this image?', body: PAID, confirmLabel: 'Generate' })) {
+      await generate({ scenePrompt: $('#scene').value, stylePreset: $('#style').value }, $('#generate-error'));
+    }
     updateGenerateButton(); // back to grey if the box no longer holds a usable scene
   });
-  onTap($('#more-like-this'), () => generate({ referenceImageId: state.image.id }, $('#image-error')));
-  onTap($('#generate-another'), () =>
-    generate({ scenePrompt: state.image.scene_prompt, stylePreset: state.image.style_preset, parentBatchId: state.image.batch_id }, $('#image-error')),
-  );
-  confirmTap($('#start-animation'), 'Start animation', async () => {
+  onTap($('#more-like-this'), async () => {
+    if (!(await askConfirm({ title: 'Make a variation of this image?', body: `A new image in the same spirit. ${PAID}`, confirmLabel: 'Generate' }))) return;
+    await generate({ referenceImageId: state.image.id }, $('#image-error'));
+  });
+  onTap($('#generate-another'), async () => {
+    if (!(await askConfirm({ title: 'Generate another from this prompt?', body: PAID, confirmLabel: 'Generate' }))) return;
+    await generate({ scenePrompt: state.image.scene_prompt, stylePreset: state.image.style_preset, parentBatchId: state.image.batch_id }, $('#image-error'));
+  });
+  onTap($('#start-animation'), async () => {
+    const yes = await askConfirm({
+      title: 'Start this animation?',
+      body: `Veo makes an 8-second looping clip. It takes a few minutes and costs more than an image. ${PAID}`,
+      confirmLabel: 'Start animation',
+    });
+    if (!yes) return;
     showError($('#animate-error'), null);
     try {
       await api('/api/animations', { method: 'POST', body: { imageId: state.image.id, motionPrompt: $('#motion').value } });

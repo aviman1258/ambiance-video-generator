@@ -186,3 +186,20 @@ button.primary:disabled { background: var(--panel-2); border-color: var(--line);
   .tabs { flex-wrap: nowrap; overflow-x: auto; gap: 2px; scrollbar-width: none; }
   .tab { padding: 6px 8px; font-size: 14px; white-space: nowrap; }
 }
+
+/* delete buttons and the confirmation box */
+button.danger { background: var(--bad); border-color: var(--bad); color: #1b0a06; font-weight: 600; }
+button.danger-ghost { background: transparent; color: var(--bad); }
+button.danger-ghost:hover:not(:disabled) { border-color: var(--bad); }
+.notice.bad { color: var(--bad); }
+dialog#confirm-dialog {
+  width: min(92vw, 420px);
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}
+dialog#confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog#confirm-dialog h2 { font-size: 17px; }
+dialog#confirm-dialog .row { margin-top: 16px; }

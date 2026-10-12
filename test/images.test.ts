@@ -73,17 +73,48 @@ test('search matches the start of any word in a tag, and every term must match',
   assert.deepEqual(services.images.listTags()[0], { tag: 'evening', count: 1 });
 });
 
-test('tags can be replaced by hand; saved filter and pagination work', async () => {
+test('tags can be replaced by hand; pagination works', async () => {
   const services = makeServices();
   const first = await generateOne(services, 'Rajasthani haveli at night');
   await generateOne(services, 'Kerala houseboat');
-  services.images.updateImage(first.id, { saved: true, tags: ['Haveli', 'lanterns', 'haveli'] });
+  services.images.updateImage(first.id, { tags: ['Haveli', 'lanterns', 'haveli'] });
   assert.deepEqual(services.images.tagsFor(first.id), ['haveli', 'lanterns']);
-
-  const saved = services.images.listImages({ saved: true });
-  assert.equal(saved.total, 1);
-  assert.equal(saved.items[0]!.scene_prompt, 'Rajasthani haveli at night');
   assert.equal(services.images.listImages({ limit: 1, offset: 1 }).items[0]!.id, first.id);
+});
+
+test('deleting an image removes its tags, animations and files, but keeps files other rows still use', async () => {
+  const services = makeServices();
+  const keep = await generateOne(services, 'Rajasthani haveli at night');
+  const doomed = await generateOne(services, 'Kerala houseboat in the rain');
+  const variation = services.images.createBatch({ referenceImageId: doomed.id });
+  await variation.done;
+  const anim = services.animations.create({ imageId: doomed.id, motionPrompt: 'rain on water' });
+  await services.animations.idle();
+  const clip = services.animations.get(anim.id).file_path!;
+  const doomedDetail = services.images.getImageDetail(doomed.id);
+  const spent = services.cost.spentUsd();
+
+  await services.images.deleteImage(doomed.id);
+
+  assert.throws(() => services.images.getImageRow(doomed.id), NotFoundError);
+  assert.throws(() => services.animations.get(anim.id), NotFoundError);
+  assert.deepEqual(services.images.tagsFor(doomed.id), []);
+  for (const rel of [doomedDetail.file_path, doomedDetail.thumb_path!, doomedDetail.preview_path!, clip]) {
+    assert.equal(fs.existsSync(services.assets.abs(rel)), false, `${rel} removed`);
+  }
+  const keptDetail = services.images.getImageDetail(keep.id);
+  assert.ok(fs.existsSync(services.assets.abs(keptDetail.file_path)));
+  assert.equal(services.images.getBatchRow(variation.batch.id).reference_image_id, null, 'variation survives, link cleared');
+  assert.equal(services.cost.spentUsd(), spent, 'spending history is kept');
+});
+
+test('an image that is still being animated cannot be deleted', async () => {
+  const services = makeServices();
+  const image = await generateOne(services, 'Goa beach shack at sunset');
+  services.animations.create({ imageId: image.id, motionPrompt: 'waves' });
+  await assert.rejects(services.images.deleteImage(image.id), /still being animated/);
+  await services.animations.idle();
+  await services.images.deleteImage(image.id);
 });
 
 test('the spend cap blocks a generation before any call is made', () => {

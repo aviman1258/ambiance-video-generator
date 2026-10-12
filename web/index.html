@@ -21,7 +21,6 @@
     <section id="home-view">
       <nav class="tabs" role="tablist">
         <a class="tab" data-tab="new" href="#/new" role="tab">New scene</a>
-        <a class="tab" data-tab="saved" href="#/saved" role="tab">Saved <span id="saved-count" class="count"></span></a>
         <a class="tab" data-tab="all" href="#/all" role="tab">All images <span id="all-count" class="count"></span></a>
         <a class="tab" data-tab="animations" href="#/animations" role="tab">Animations <span id="animations-count" class="count"></span></a>
       </nav>
@@ -63,7 +62,7 @@
       <div class="overlay-bar">
         <button class="ghost back">← Back</button>
         <span class="grow"></span>
-        <button id="save-toggle" class="star"></button>
+        <button id="delete-image" class="danger-ghost" aria-label="Delete image">🗑 Delete</button>
       </div>
       <div class="overlay-inner">
         <div class="panel image-panel">
@@ -112,6 +111,7 @@
         <button class="ghost back">← Back</button>
         <span class="grow"></span>
         <button id="best-toggle" class="star" hidden></button>
+        <button id="delete-animation" class="danger-ghost" aria-label="Delete animation" hidden>🗑 Delete</button>
       </div>
       <div class="overlay-inner">
         <div class="panel image-panel">
@@ -128,6 +128,19 @@
       </div>
     </section>
   </main>
+
+  <!-- Confirmation for anything that costs money or deletes something -->
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-body" class="hint"></p>
+      <div class="row">
+        <span class="grow"></span>
+        <button value="cancel" class="ghost">Cancel</button>
+        <button value="ok" id="confirm-ok" class="primary"></button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="/app.js"></script>
 </body>

@@ -1,5 +1,5 @@
 import type { AssetStore } from '../../core/assets.ts';
-import { extensionFor } from '../../core/assets.ts';
+import { extensionFor, removeOrphans } from '../../core/assets.ts';
 import type { CostGuard } from '../../core/cost.ts';
 import { type Db, now } from '../../core/db.ts';
 import { imageInfo } from '../../core/imageInfo.ts';
@@ -55,13 +55,16 @@ export type CreateBatchInput = {
   referenceImageId?: number;
 };
 
-export type ListImagesInput = { q?: string; saved?: boolean; limit?: number; offset?: number };
+export type ListImagesInput = { q?: string; limit?: number; offset?: number };
 
 export class NotFoundError extends Error {
   readonly statusCode = 404;
 }
 export class BadRequestError extends Error {
   readonly statusCode = 400;
+}
+export class ConflictError extends Error {
+  readonly statusCode = 409;
 }
 
 const CONCURRENCY = 3;
@@ -293,7 +296,6 @@ export class ImageService {
   listImages(input: ListImagesInput = {}): { items: ImageListItem[]; total: number } {
     const where: string[] = [];
     const params: (string | number)[] = [];
-    if (input.saved) where.push('i.saved = 1');
     for (const term of searchTerms(input.q)) {
       where.push(
         `EXISTS (SELECT 1 FROM image_tags t WHERE t.image_id = i.id AND (t.tag LIKE ? ESCAPE '\\' OR t.tag LIKE ? ESCAPE '\\'))`,
@@ -339,12 +341,42 @@ export class ImageService {
     return rows.map(({ tag, count }) => ({ tag, count }));
   }
 
-  updateImage(id: number, patch: { saved?: boolean; notes?: string | null; tags?: string[] }): ImageRow {
+  updateImage(id: number, patch: { notes?: string | null; tags?: string[] }): ImageRow {
     this.getImageRow(id);
-    if (patch.saved !== undefined) this.db.prepare('UPDATE images SET saved = ? WHERE id = ?').run(patch.saved ? 1 : 0, id);
     if (patch.notes !== undefined) this.db.prepare('UPDATE images SET notes = ? WHERE id = ?').run(patch.notes, id);
     if (patch.tags !== undefined) this.writeTags(id, normalizeTags(patch.tags));
     return this.getImageRow(id);
+  }
+
+  /**
+   * Deletes an image, its tags and its animations, plus any files nothing else uses. Refused while
+   * one of its animations is still being made (Google would keep billing for it either way).
+   * Cost-ledger rows stay: they're the spending history.
+   */
+  async deleteImage(id: number): Promise<void> {
+    const image = this.getImageRow(id);
+    const busy = this.db
+      .prepare("SELECT COUNT(*) AS n FROM animations WHERE image_id = ? AND status IN ('pending', 'running')")
+      .get(id) as { n: number };
+    if (busy.n > 0) throw new ConflictError('This image is still being animated. Delete it once the animation finishes.');
+
+    const clips = (this.db.prepare('SELECT file_path FROM animations WHERE image_id = ?').all(id) as { file_path: string | null }[]).map(
+      (r) => r.file_path,
+    );
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM animations WHERE image_id = ?').run(id);
+      this.db.prepare('DELETE FROM image_tags WHERE image_id = ?').run(id);
+      // "More like this" generations keep their own images; they just lose the link to this one.
+      this.db.prepare('UPDATE image_batches SET reference_image_id = NULL WHERE reference_image_id = ?').run(id);
+      this.db.prepare('DELETE FROM images WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    await removeOrphans(this.db, this.assets, [image.file_path, image.thumb_path, image.preview_path, ...clips]);
+    this.log.info({ imageId: id, animations: clips.length }, 'image deleted');
   }
 
   tagsFor(imageId: number): string[] {

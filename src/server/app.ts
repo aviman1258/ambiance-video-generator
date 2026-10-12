@@ -30,13 +30,11 @@ const CreateBatchBody = z.object({
   referenceImageId: Id.optional(),
 });
 const PatchImageBody = z.object({
-  saved: z.boolean().optional(),
   notes: z.string().max(2000).nullable().optional(),
   tags: z.array(z.string().max(100)).max(50).optional(),
 });
 const ListImagesQuery = z.object({
   q: z.string().max(200).optional(),
-  saved: z.enum(['1', 'true']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(60),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -70,7 +68,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   const withUrl = <T extends ImageRow>(img: T) => ({
     ...img,
-    saved: !!img.saved,
     url: `/assets/${img.file_path}`,
     thumbUrl: `/assets/${img.thumb_path ?? img.file_path}`,
     previewUrl: `/assets/${img.preview_path ?? img.file_path}`,
@@ -114,7 +111,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   app.get('/api/images', async (req) => {
     const query = ListImagesQuery.parse(req.query);
-    const { items, total } = images.listImages({ q: query.q, saved: !!query.saved, limit: query.limit, offset: query.offset });
+    const { items, total } = images.listImages({ q: query.q, limit: query.limit, offset: query.offset });
     return { items: items.map(withUrl), total };
   });
 
@@ -129,6 +126,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const { id } = IdParams.parse(req.params);
     images.updateImage(id, PatchImageBody.parse(req.body ?? {}));
     return withUrl(images.getImageDetail(id));
+  });
+
+  app.delete('/api/images/:id', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    await images.deleteImage(id);
+    return reply.code(204).send();
   });
 
   app.get('/api/images/:id/motion-suggestion', async (req) => {
@@ -155,6 +158,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const { id } = IdParams.parse(req.params);
     animations.setStarred(id, PatchAnimationBody.parse(req.body ?? {}).starred);
     return animationView(animations.getWithImage(id));
+  });
+
+  app.delete('/api/animations/:id', async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    await animations.delete(id);
+    return reply.code(204).send();
   });
 
   app.get('/api/spend', async () => cost.summary());
