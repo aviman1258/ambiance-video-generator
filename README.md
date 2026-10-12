@@ -30,6 +30,22 @@ GEMINI_API_KEY=...      # https://aistudio.google.com/apikey
 SPEND_CAP_USD=10
 ```
 
+## Deploy to Render (use it from your phone)
+
+`render.yaml` is a Render Blueprint: one always-on Starter web service with a 2 GB persistent disk at `/var/data` for the database and generated files. It's the same pattern as the tour-guide (deodapper.com) service.
+
+1. In Render: **New → Blueprint**, then pick this repo.
+2. When prompted, enter:
+   - **`GEMINI_API_KEY`**: get one at https://aistudio.google.com/apikey (works from a phone).
+   - **`APP_PASSWORD`**: at least 12 characters. It's the only thing protecting your API spend.
+
+   `SESSION_SECRET` is generated automatically.
+3. Open the service URL on your phone and log in.
+
+The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSION_SECRET`. Sessions are signed cookies that last 30 days. After 5 wrong passwords, an IP is locked out for 15 minutes.
+
+## Notes
+
 `npm start` runs Node with `--use-system-ca`. Corporate TLS inspection makes Node's built-in certificate list reject Google's API, and this flag makes Node trust the Windows certificate store instead.
 
 ## Configuration
@@ -39,7 +55,10 @@ SPEND_CAP_USD=10
 | `PROVIDERS` | `mock` | `mock` (free) or `google` (paid Gemini image API + Veo) |
 | `GEMINI_API_KEY` | — | Required for `google` |
 | `SPEND_CAP_USD` | `10` | Hard cap on recorded spend. In-flight animations count against it. |
-| `PORT` / `HOST` | `4317` / `127.0.0.1` | Bound to localhost; there's no login yet |
+| `PORT` / `HOST` | `4317` / `127.0.0.1` | Any non-localhost `HOST` requires the login settings below |
+| `APP_PASSWORD` | — | Turns on the password login (12+ characters) |
+| `SESSION_SECRET` | — | Signs session cookies (32+ characters); required with `APP_PASSWORD` |
+| `TRUST_PROXY` | `0` | Proxy hops to trust for client IP / https (`1` on Render) |
 | `DATA_DIR` | `./data` | SQLite database and generated files (gitignored) |
 | `IMAGES_PER_BATCH` | `6` | Candidates per batch |
 | `IMAGE_MODEL` | `gemini-nano-banana-2.1` | Gemini image model |
@@ -72,6 +91,8 @@ SPEND_CAP_USD=10
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/health` | Health check (public) |
+| POST | `/api/login` / `/api/logout` | `{ password }`. Sets or clears the session cookie (only when login is on). |
 | GET | `/api/config` | Provider, models, cost estimates, spend |
 | GET | `/api/batches?limit=` | Recent batches with their images |
 | POST | `/api/batches` | `{ scenePrompt?, stylePreset?, parentBatchId?, referenceImageId? }`. Starts a batch (202). |

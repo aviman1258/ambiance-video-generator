@@ -45,7 +45,7 @@ h3 { font-size: 15px; margin: 20px 0 8px; color: var(--muted); }
 
 label { display: block; color: var(--muted); font-size: 13px; margin: 10px 0 6px; }
 label.inline { display: inline; margin: 0; }
-textarea, select {
+textarea, select, input {
   width: 100%;
   background: var(--panel-2);
   color: var(--text);

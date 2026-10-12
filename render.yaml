@@ -1,0 +1,37 @@
+# Render Blueprint: one always-on web service (Starter) with a persistent disk for the SQLite
+# database and generated images/clips. Create it in Render with "New → Blueprint" pointing at
+# this repo. Secrets (GEMINI_API_KEY, APP_PASSWORD) are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: ambiance-studio
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATA_DIR
+        value: /var/data
+      - key: PROVIDERS
+        value: google
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SPEND_CAP_USD
+        value: "10"
+    disk:
+      name: ambiance-data
+      mountPath: /var/data
+      sizeGB: 2

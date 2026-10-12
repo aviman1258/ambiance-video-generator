@@ -32,6 +32,10 @@ async function api(path, opts = {}) {
     headers: opts.body ? { 'content-type': 'application/json' } : {},
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  if (res.status === 401) {
+    location.replace('/login.html');
+    throw new Error('Not logged in');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
   return data;
@@ -81,6 +85,7 @@ async function loadConfig() {
   const badge = $('#provider');
   badge.textContent = c.provider === 'mock' ? 'MOCK · free' : `${c.imageModel} · ${c.videoModel}`;
   badge.classList.toggle('paid', c.provider !== 'mock');
+  $('#logout').hidden = !c.authEnabled;
   $('#style').replaceChildren(...c.stylePresets.map((p) => h('option', { value: p.id }, p.label)));
   renderSpend(c.spend);
 }
@@ -288,6 +293,11 @@ async function loadHistory() {
 }
 
 // ---------- wire up ----------
+
+$('#logout').addEventListener('click', async () => {
+  await api('/api/logout', { method: 'POST' });
+  location.replace('/login.html');
+});
 
 async function init() {
   await loadConfig();

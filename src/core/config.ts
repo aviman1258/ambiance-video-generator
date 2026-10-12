@@ -17,11 +17,26 @@ const EnvSchema = z
     VIDEO_COST_PER_SECOND_USD: z.coerce.number().nonnegative().default(0.12),
     VIDEO_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(10_000),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+    APP_PASSWORD: z.string().min(12, 'APP_PASSWORD must be at least 12 characters').optional(),
+    SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters').optional(),
+    TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   })
   .refine((env) => env.PROVIDERS !== 'google' || !!env.GEMINI_API_KEY, {
     message: 'GEMINI_API_KEY is required when PROVIDERS=google',
     path: ['GEMINI_API_KEY'],
+  })
+  .refine((env) => isLoopback(env.HOST) || (!!env.APP_PASSWORD && !!env.SESSION_SECRET), {
+    message: 'APP_PASSWORD and SESSION_SECRET are required when HOST is not localhost (the page would be open to anyone)',
+    path: ['APP_PASSWORD'],
+  })
+  .refine((env) => !env.APP_PASSWORD || !!env.SESSION_SECRET, {
+    message: 'SESSION_SECRET is required when APP_PASSWORD is set',
+    path: ['SESSION_SECRET'],
   });
+
+function isLoopback(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
 
 export type Config = {
   providers: 'mock' | 'google';
@@ -38,6 +53,10 @@ export type Config = {
   videoCostPerSecondUsd: number;
   videoPollIntervalMs: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  /** When set, the whole app sits behind a password login. */
+  auth: { password: string; secret: string } | undefined;
+  /** Number of proxy hops to trust for the client IP / protocol (Render: 1). */
+  trustProxy: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -64,5 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     videoCostPerSecondUsd: e.VIDEO_COST_PER_SECOND_USD,
     videoPollIntervalMs: e.VIDEO_POLL_INTERVAL_MS,
     logLevel: e.LOG_LEVEL,
+    auth: e.APP_PASSWORD && e.SESSION_SECRET ? { password: e.APP_PASSWORD, secret: e.SESSION_SECRET } : undefined,
+    trustProxy: e.TRUST_PROXY,
   };
 }

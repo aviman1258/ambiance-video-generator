@@ -8,9 +8,11 @@ import type { CostGuard } from '../core/cost.ts';
 import type { AnimationRow, AnimationService } from '../modules/animation/service.ts';
 import type { ImageRow, ImageService } from '../modules/images/service.ts';
 import { STYLE_PRESETS } from '../modules/images/style.ts';
+import { registerAuth } from './auth.ts';
 
 export type AppDeps = {
-  config: Pick<Config, 'providers' | 'imageModel' | 'videoModel' | 'imagesPerBatch' | 'logLevel'>;
+  config: Pick<Config, 'providers' | 'imageModel' | 'videoModel' | 'imagesPerBatch' | 'logLevel'> &
+    Partial<Pick<Config, 'auth' | 'trustProxy'>>;
   assets: AssetStore;
   cost: CostGuard;
   images: ImageService;
@@ -32,8 +34,15 @@ const CreateAnimationBody = z.object({ imageId: Id, motionPrompt: z.string().max
 const PatchAnimationBody = z.object({ starred: z.boolean() });
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
-  const app = Fastify({ logger: deps.logger === false ? false : { level: deps.config.logLevel } });
+  const app = Fastify({
+    logger: deps.logger === false ? false : { level: deps.config.logLevel },
+    // Trust the nearest N proxy hops (Render's load balancer) for the client IP and https.
+    trustProxy: (_address: string, hop: number) => hop < (deps.config.trustProxy ?? 0),
+  });
   const { images, animations, cost, assets, config } = deps;
+
+  app.get('/api/health', async () => ({ ok: true }));
+  if (config.auth) registerAuth(app, config.auth);
 
   app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
     if (err instanceof z.ZodError) {
@@ -54,6 +63,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   app.get('/api/config', async () => ({
     provider: config.providers,
+    authEnabled: !!config.auth,
     imageModel: images.generator.model,
     videoModel: animations.generator.model,
     imagesPerBatch: config.imagesPerBatch,

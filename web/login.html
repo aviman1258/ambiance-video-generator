@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Ambiance Studio · Log in</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23e8a24a'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main style="max-width: 380px; padding-top: 18vh">
+    <form class="panel" id="login">
+      <h2>Ambiance Studio</h2>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required autofocus />
+      <div class="row"><span class="grow"></span><button class="primary" type="submit">Log in</button></div>
+      <p id="error" class="error" hidden></p>
+    </form>
+  </main>
+  <script type="module">
+    const form = document.querySelector('#login');
+    const error = document.querySelector('#error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.hidden = true;
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: document.querySelector('#password').value }),
+      });
+      if (res.ok) return location.replace('/');
+      error.textContent = (await res.json().catch(() => ({}))).error ?? 'Login failed';
+      error.hidden = false;
+    });
+  </script>
+</body>
+</html>
