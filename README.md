@@ -86,8 +86,8 @@ The app won't start on a non-localhost `HOST` without `APP_PASSWORD` and `SESSIO
 | `VIDEO_COST_PER_SECOND_USD` | `0.12` | Veo 3.1 Fast price per second (checked 2026-10-12); 8 s ≈ $0.96 |
 | `VIDEO_POLL_INTERVAL_MS` | `10000` | How often to check on a Veo job |
 | `ANIMATION_TAKES` | `3` | Veo takes per animation (1–4), each 8 s; 3 takes ≈ a 24 s loop at ≈ $2.88 |
-| `MOTION_MODEL` | `gemini-2.5-flash` | Vision model that plans the motion prompts ($0.30 / $2.50 per million tokens, checked 2026-10-12) |
-| `MOTION_COST_USD` | `0.002` | Estimated cost of one motion-planning call |
+| `MOTION_MODEL` | `gemini-3.8-flash` | Vision model that plans the motion prompts ($0.75 / $3.75 per million tokens through 2026, $1.50 / $7.50 from 2027; checked 2026-10-12). `gemini-2.5-flash` is closed to new accounts. |
+| `MOTION_COST_USD` | `0.004` | Estimated cost of one motion-planning call |
 | `FFMPEG_PATH` | bundled | FFmpeg used to join takes; defaults to the binary from the `ffmpeg-static` package |
 
 ## How it works
