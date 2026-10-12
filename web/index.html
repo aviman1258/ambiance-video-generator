@@ -50,13 +50,14 @@
       </div>
     </section>
 
-    <!-- One image -->
-    <section id="image-view" hidden>
-      <div class="row">
+    <!-- One image: a full-screen layer over the grid, so closing it returns to the same scroll spot -->
+    <section id="image-view" class="overlay" hidden role="dialog" aria-label="Image">
+     <div class="overlay-bar">
         <button id="back" class="ghost">← Back</button>
         <span class="grow"></span>
         <button id="save-toggle" class="star"></button>
-      </div>
+     </div>
+     <div class="overlay-inner">
 
       <div class="panel image-panel">
         <a id="full-link" target="_blank" rel="noopener" title="Open full resolution"><img id="image-preview" alt="" /></a>
@@ -66,7 +67,7 @@
           <button id="more-like-this">More like this</button>
           <button id="generate-another">Generate another</button>
           <span class="grow"></span>
-          <a href="#animate-section" class="button-link">Animate ↓</a>
+          <button id="jump-animate">Animate ↓</button>
         </div>
         <p id="image-error" class="error" hidden></p>
 
@@ -97,6 +98,7 @@
         <p class="hint" id="takes-empty">No animations for this image yet.</p>
         <div id="takes" class="grid"></div>
       </div>
+     </div>
     </section>
   </main>
 

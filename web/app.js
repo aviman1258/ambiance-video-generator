@@ -120,25 +120,39 @@ function route() {
   const hash = location.hash || '#/new';
   const imageMatch = hash.match(/^#\/image\/(\d+)/);
   clearTimeout(state.timers.takes);
+  const overlay = $('#image-view');
+
   if (imageMatch) {
-    $('#home-view').hidden = true;
-    $('#image-view').hidden = false;
+    // The image opens as a layer over the grid; the grid underneath keeps its scroll position.
+    if (!state.homeShown) showHome(state.tab === 'new' ? 'all' : state.tab, { scrollTop: true }); // opened from a direct link
+    overlay.hidden = false;
+    document.body.classList.add('no-scroll');
     openImage(Number(imageMatch[1]));
     return;
   }
+
+  const closingOverlay = !overlay.hidden;
+  overlay.hidden = true;
+  document.body.classList.remove('no-scroll');
   const tab = { '#/saved': 'saved', '#/all': 'all' }[hash] ?? 'new';
+  const backToSameGrid = closingOverlay && tab === state.tab;
+  showHome(tab, { scrollTop: !backToSameGrid, keepCount: backToSameGrid });
+}
+
+function showHome(tab, { scrollTop, keepCount = false }) {
+  state.homeShown = true;
   state.tab = tab;
-  $('#home-view').hidden = false;
-  $('#image-view').hidden = true;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
   $('#new-tab').hidden = tab !== 'new';
   $('#library-tab').hidden = tab === 'new';
   if (tab !== 'new') {
     $('#search').value = state.search[tab];
-    loadLibrary({ reset: true });
+    // Coming back from an image: refresh in place (stars/tags may have changed) without losing loaded pages.
+    loadLibrary({ reset: true, keepCount });
     loadTagChips();
   }
-  window.scrollTo(0, 0);
+  if (scrollTop || state.scrollTopNext) window.scrollTo(0, 0);
+  state.scrollTopNext = false;
 }
 
 window.addEventListener('hashchange', () => {
@@ -160,8 +174,13 @@ async function generate(body, errorEl) {
   }
   const pending = { id: gen.id, scene: gen.scene_prompt };
   state.pending.unshift(pending);
-  if (location.hash === '#/all') loadLibrary({ reset: true });
-  else location.hash = '#/all';
+  if (location.hash === '#/all') {
+    loadLibrary({ reset: true });
+    window.scrollTo(0, 0);
+  } else {
+    state.scrollTopNext = true; // so the "Generating…" tile at the top of the grid is in view
+    location.hash = '#/all';
+  }
 
   while (true) {
     await sleep(2000);
@@ -188,12 +207,13 @@ async function generate(body, errorEl) {
 
 // ---------- library (Saved / All) ----------
 
-async function loadLibrary({ reset }) {
+async function loadLibrary({ reset, keepCount = false }) {
   const tab = state.tab;
   const q = state.search[tab];
   const key = `${tab}|${q}`;
   const offset = reset ? 0 : state.library.items.length;
-  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+  const limit = keepCount && state.library.key === key ? Math.max(PAGE_SIZE, state.library.items.length) : PAGE_SIZE;
+  const params = new URLSearchParams({ limit: String(Math.min(limit, 200)), offset: String(offset) });
   if (q) params.set('q', q);
   if (tab === 'saved') params.set('saved', '1');
   const page = await api(`/api/images?${params}`);
@@ -278,6 +298,10 @@ $('#load-more').addEventListener('click', () => loadLibrary({ reset: false }));
 async function openImage(id) {
   showError($('#image-error'), null);
   showError($('#animate-error'), null);
+  $('#image-view').scrollTop = 0;
+  // Show the grid's thumbnail instantly (if we have it) while the full details load.
+  const known = state.library.items.find((i) => i.id === id);
+  $('#image-preview').src = known ? known.thumbUrl : '';
   let img;
   try {
     img = await api(`/api/images/${id}`);
@@ -285,9 +309,9 @@ async function openImage(id) {
     showError($('#image-error'), e);
     return;
   }
+  if (!location.hash.startsWith(`#/image/${id}`)) return; // closed or moved on while loading
   state.image = img;
   renderImage();
-  window.scrollTo(0, 0);
   const { motionPrompt } = await api(`/api/images/${id}/motion-suggestion`);
   state.suggestedMotion = motionPrompt;
   $('#motion').value = motionPrompt;
@@ -352,6 +376,8 @@ $('#save-toggle').addEventListener('click', async () => {
   renderImage();
   refreshCounts();
 });
+
+$('#jump-animate').addEventListener('click', () => $('#animate-section').scrollIntoView({ behavior: 'smooth', block: 'start' }));
 
 $('#back').addEventListener('click', () => {
   if (state.cameFromApp && history.length > 1) history.back();

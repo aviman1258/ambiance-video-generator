@@ -145,5 +145,22 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel-2)
 a { color: var(--accent); }
 
 @media (max-width: 640px) { main { padding: 14px 16px 40px; } .topbar { padding: 10px 16px; gap: 8px; } .topbar h1 { font-size: 16px; } }
-#home-view, #image-view { display: grid; gap: 14px; }
+#home-view { display: grid; gap: 14px; }
 .tabs { margin-bottom: 0; }
+
+/* image overlay */
+.overlay { position: fixed; inset: 0; z-index: 10; overflow-y: auto; overscroll-behavior: contain; background: var(--bg); }
+.overlay-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px;
+  background: rgba(21, 18, 15, 0.92);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}
+.overlay-inner { max-width: 1280px; margin: 0 auto; padding: 14px 16px calc(40px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 14px; }
+body.no-scroll { overflow: hidden; }
